@@ -120,7 +120,7 @@ canvas { display: block; width: 100%; height: 100%; }
     <div style="margin-top:6px;font-size:10px;">
       <span style="color:#4CAF50;">■</span> Within tolerance &nbsp;
       <span style="color:#1e88e5;">■</span> Below &nbsp;
-      <span style="color:#F44336;">■</span> Above
+      <span style="color:#E8A317;">■</span> Above
     </div>
     <div style="margin-top:4px;font-size:10px;">
       <span style="color:#F44336;font-weight:bold;">✕</span> Crossing &nbsp;
@@ -223,7 +223,7 @@ function z0ToColor(z0, target, tolPct) {
   var high = target * (1 + tolPct / 100);
   var halfRange = target * tolPct / 100;
 
-  // Continuous gradient: deep blue → blue → green → red → deep red
+  // Continuous gradient: deep blue → blue → green → amber → deep amber
   // Map z0 to a normalized position: 0 = 2x below, 0.5 = target, 1 = 2x above
   // The tolerance zone maps to ~0.35–0.65
   var spread = halfRange * 2; // how far from target until max color
@@ -247,17 +247,17 @@ function z0ToColor(z0, target, tolPct) {
     g = Math.round(80 + 140 * s);
     b = Math.round(220 - 190 * s);
   } else if (pos < 0.75) {
-    // Green → red
+    // Green → amber
     var s = (pos - 0.5) / 0.25;
-    r = Math.round(60 + 160 * s);
-    g = Math.round(220 - 160 * s);
-    b = Math.round(30 + 10 * s);
+    r = Math.round(60 + 172 * s);
+    g = Math.round(220 - 57 * s);
+    b = Math.round(30 - 7 * s);
   } else {
-    // Red → deep red
+    // Amber → deep amber
     var s = (pos - 0.75) / 0.25;
-    r = Math.round(220 + 35 * s);
-    g = Math.round(60 - 35 * s);
-    b = Math.round(40 - 15 * s);
+    r = Math.round(232 + 23 * s);
+    g = Math.round(163 - 33 * s);
+    b = Math.round(23 - 8 * s);
   }
 
   return 'rgb(' + r + ',' + g + ',' + b + ')';
@@ -279,11 +279,11 @@ function z0ToGradientColor(z0, minZ, maxZ) {
     g = Math.round(80 + 140 * s);
     b = Math.round(200 * (1 - s));
   } else {
-    // Green to Red
+    // Green to Amber
     var s = (t - 0.5) * 2;
     r = Math.round(80 + 175 * s);
-    g = Math.round(220 * (1 - s));
-    b = Math.round(30 * (1 - s));
+    g = Math.round(220 - 57 * s);
+    b = Math.round(30 - 15 * s);
   }
   return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
@@ -364,7 +364,7 @@ function draw() {
 
   // Selection highlight colors
   var grayColor = 'rgba(255,255,255,0.04)';
-  var hlColorA = '#ff6b6b'; // red for net A
+  var hlColorA = '#f0a040'; // amber for net A
   var hlColorB = '#4dabf7'; // blue for net B
 
   // Helper: check if a trace matches selected crossing nets
@@ -930,7 +930,7 @@ function updateStats() {
     '<div class="info-row"><span class="lbl">Target Z₀:</span><span>' + targetZ0 + 'Ω ±' + tolerancePct + '%</span></div>' +
     '<div class="info-row"><span class="lbl">Range:</span><span>' + low.toFixed(1) + '–' + high.toFixed(1) + 'Ω</span></div>' +
     '<div class="info-row"><span class="lbl" style="color:var(--green)">✓ Within:</span><span style="color:var(--green);font-weight:700">' + inTol + '</span></div>' +
-    '<div class="info-row"><span class="lbl" style="color:var(--red)">✗ Outside:</span><span style="color:var(--red);font-weight:700">' + outTol + '</span></div>';
+    '<div class="info-row"><span class="lbl" style="color:var(--orange)">✗ Outside:</span><span style="color:var(--orange);font-weight:700">' + outTol + '</span></div>';
   if (noZ0 > 0) {
     html += '<div class="info-row"><span class="lbl" style="color:var(--fg2)">— No Z₀:</span><span>' + noZ0 + '</span></div>';
   }
@@ -1017,7 +1017,7 @@ function updateStats() {
 
   // Gradient bar
   var barEl = document.getElementById('legend-bar');
-  barEl.style.background = 'linear-gradient(to right, #1e88e5, #4CAF50 35%, #4CAF50 65%, #F44336)';
+  barEl.style.background = 'linear-gradient(to right, #1e88e5, #4CAF50 35%, #4CAF50 65%, #E8A317)';
 }
 
 function populateVizFilters() {

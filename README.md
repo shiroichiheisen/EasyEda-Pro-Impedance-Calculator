@@ -151,6 +151,14 @@ $zip.Dispose()
 
 ## Changelog
 
+### v1.13.6 — Board Outline, Arc Hover, Color Update & Cleanup
+
+- **Board outline in Trace Visualization** — the PCB board outline is now extracted and rendered on the canvas (dark background fill + white stroke), providing spatial context for trace layout.
+- **Arc hover tooltip** — hovering over curved trace segments in Trace Visualization now shows Z₀, net, layer and width (previously only straight segments had hover info).
+- **Loading overlay** — spinner with "Loading PCB data…" displayed while the visualization canvas initializes, preventing a blank screen.
+- **Color scale update** — replaced red with amber (#E8A317) for above-target impedance values. Red implied a problem, but above-target impedance is not inherently bad. Red is now reserved only for crossing markers (actual issues). Net selection highlight also changed to amber.
+- **Removed debug buttons** — debug export removed from Trace Visualization (was added in v1.11.1).
+
 ### v1.13.4 — UI Cleanup & Gradient Colors
 
 - **Continuous gradient coloring** for Z₀ values in the table, sidebar badges and summary cards (blue → green → red based on target/tolerance).
