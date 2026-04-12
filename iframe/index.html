@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCB Trace Impedance Calculator</title>
+<script src="/iframe/impedance-calc.js"></script>
+<style>
+:root {
+  --bg: #1a1a2e; --bg2: #16213e; --bg3: #0f3460; --fg: #eee; --fg2: #aaa;
+  --card: #16213e; --border: #0f3460; --input-bg: #0d1b2a; --input-fg: #eee;
+  --accent: #4cc9f0; --accent2: #7209b7;
+  --green: #4CAF50; --blue: #2196F3; --purple: #9C27B0; --orange: #FF9800; --red: #F44336;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; }
+.toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-wrap: wrap; flex-shrink: 0; }
+.toolbar h1 { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.toolbar select, .toolbar input { font-size: 13px; padding: 5px 10px; border-radius: 4px; border: 1px solid var(--border); background: var(--input-bg); color: var(--input-fg); }
+.toolbar button { font-size: 13px; padding: 5px 14px; border-radius: 4px; border: none; background: var(--accent); color: #fff; font-weight: 500; cursor: pointer; }
+.toolbar button:hover { opacity: 0.85; }
+.toolbar button.secondary { background: transparent; border: 1px solid var(--border); color: var(--fg2); }
+.spacer { flex: 1; }
+.status { font-size: 12px; color: var(--fg2); }
+
+/* Main layout */
+.main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.sidebar { width: 280px; min-width: 240px; background: var(--bg2); border-right: 1px solid var(--border); overflow-y: auto; padding: 12px; }
+.content { flex: 1; overflow-y: auto; padding: 16px; }
+
+/* Summary cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px; text-align: center; }
+.card .value { font-size: 20px; font-weight: 700; color: var(--accent); }
+.card .label { font-size: 10px; color: var(--fg2); margin-top: 2px; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: var(--bg3); color: var(--fg); padding: 8px 10px; text-align: left; position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tr:hover td { background: rgba(76,201,240,0.05); }
+.z0-cell { font-weight: 700; font-size: 14px; }
+
+/* Sidebar */
+.sb-section { margin-bottom: 16px; }
+.sb-section h3 { font-size: 13px; color: var(--fg2); margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.sb-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 3px 0; }
+.sb-row .net-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.sb-row .z0-badge { padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 11px; color: #fff; }
+
+/* Settings panel */
+.settings-panel { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; width: 500px; max-height: 80vh; overflow-y: auto; z-index: 200; }
+.settings-panel.visible { display: block; }
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 199; }
+.overlay.visible { display: block; }
+.settings-panel h2 { font-size: 16px; margin-bottom: 16px; }
+.settings-panel label { display: block; font-size: 13px; color: var(--fg2); margin-bottom: 4px; margin-top: 10px; }
+.settings-panel input { width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--input-bg); color: var(--input-fg); font-size: 13px; }
+.settings-panel .actions { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+.settings-panel .actions button { padding: 6px 16px; }
+
+/* Quick calc */
+.quick-calc { margin-top: 12px; padding: 12px; background: var(--bg3); border-radius: 6px; }
+.quick-calc h4 { font-size: 12px; margin-bottom: 8px; color: var(--accent); }
+.quick-calc .row { display: flex; gap: 6px; margin-bottom: 6px; }
+.quick-calc input { flex: 1; padding: 4px 6px; font-size: 12px; }
+.quick-calc .result { font-size: 16px; font-weight: 700; color: var(--accent); margin-top: 6px; min-height: 22px; }
+
+/* Ref table */
+.ref-table { font-size: 11px; margin-top: 12px; }
+.ref-table td { padding: 2px 6px; border: none; border-bottom: 1px solid var(--border); }
+.ref-table .proto { color: var(--accent); font-weight: 600; }
+
+/* Drop zone */
+#drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; }
+#drop-zone .icon { font-size: 56px; opacity: 0.3; }
+#drop-zone p { font-size: 14px; color: var(--fg2); }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>⚡ Trace Impedance</h1>
+  <select id="layer-filter" class="hidden">
+    <option value="__all__">All layers</option>
+  </select>
+  <input type="text" id="search-box" placeholder="Search net..." class="hidden" style="width:140px;">
+  <label class="hidden" id="lbl-target" style="font-size:12px;color:var(--fg2);margin-left:8px;">Target:</label>
+  <input type="number" id="target-z0" value="50" min="1" max="500" step="1" class="hidden" style="width:60px;">
+  <label class="hidden" id="lbl-tol" style="font-size:12px;color:var(--fg2);">Ω ±</label>
+  <input type="number" id="tolerance-pct" value="10" min="1" max="100" step="1" class="hidden" style="width:50px;">
+  <label class="hidden" id="lbl-pct" style="font-size:12px;color:var(--fg2);">%</label>
+  <button id="btn-settings" class="secondary hidden">⚙ Stackup</button>
+  <button id="btn-export" class="secondary hidden">📋 Export CSV</button>
+
+  <button id="btn-widthcalc" class="hidden" style="background:#0f9d58;">📐 Width Calculator</button>
+  <button id="btn-viz" class="hidden" style="background:#7209b7;">🎨 Visualize</button>
+  <button id="btn-viz-selected" class="hidden" style="background:#9d4edd;">🎨 View Selected</button>
+  <button id="btn-clear-selected" class="hidden" style="background:#e53935;">✖ Clear Selected</button>
+  <div class="spacer"></div>
+  <span class="status" id="status">Waiting for data...</span>
+</div>
+
+<div class="main">
+  <div class="sidebar hidden" id="sidebar">
+    <div class="sb-section">
+      <h3>Summary by Net</h3>
+      <div id="net-summary"></div>
+    </div>
+
+
+
+
+  </div>
+
+  <div class="content" id="content">
+    <div id="drop-zone">
+      <div class="icon">📡</div>
+      <p>Loading PCB data...</p>
+      <button id="btn-manual-load" style="padding:10px 28px;font-size:14px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer;">
+        Load data
+      </button>
+    </div>
+
+    <div id="results-area" class="hidden">
+      <div class="cards" id="summary-cards"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:center;width:30px"><input type="checkbox" id="select-all" title="Select all"></th>
+              <th>Net</th>
+              <th>Layer</th>
+              <th style="text-align:center">ID</th>
+              <th>Type</th>
+              <th style="text-align:center">Width (mm)</th>
+              <th style="text-align:center">H (mm)</th>
+              <th style="text-align:center">Segs</th>
+              <th style="text-align:center">Length (mm)</th>
+              <th>Model</th>
+              <th style="text-align:center">Z₀ (Ω)</th>
+              <th style="text-align:center">εr eff</th>
+              <th style="text-align:center">Delay (ps/mm)</th>
+            </tr>
+          </thead>
+          <tbody id="results-table"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="overlay" id="overlay"></div>
+<div class="settings-panel" id="settings-panel">
+  <h2>⚙ Stackup Settings</h2>
+  <label>JLCPCB Stackup Preset:</label>
+  <select id="cfg-preset" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--input-fg);font-size:14px;margin-bottom:8px;"></select>
+  <div id="preset-info" style="font-size:12px;color:var(--fg2);margin-bottom:8px;"></div>
+  <div id="layer-configs"></div>
+  <div class="actions">
+    <button class="secondary" onclick="closeSettings()">Cancel</button>
+    <button onclick="saveSettings()">Apply</button>
+  </div>
+</div>
+
+<!-- Width Calculator Modal -->
+<div class="overlay" id="calc-overlay"></div>
+<div class="settings-panel" id="calc-panel">
+  <h2>📐 Width Calculator</h2>
+  <p style="font-size:12px;color:var(--fg2);margin-bottom:12px;">Calculate the required trace width for a target impedance on a specific layer.</p>
+  <label>Layer:</label>
+  <select id="calc-layer" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--input-fg);font-size:14px;margin-bottom:8px;"></select>
+  <div id="calc-layer-info" style="font-size:12px;color:var(--fg2);margin-bottom:12px;padding:8px 10px;background:var(--bg3);border-radius:4px;"></div>
+  <label>Target Impedance (Z₀):</label>
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
+    <input type="number" id="calc-target-z0" value="50" min="1" max="500" step="1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--input-fg);font-size:14px;">
+    <span style="font-size:14px;">Ω</span>
+  </div>
+  <div id="calc-result" style="min-height:60px;padding:12px;background:var(--bg3);border-radius:6px;margin-bottom:12px;"></div>
+  <div class="ref-table" style="margin-bottom:12px;">
+    <h3 style="font-size:12px;color:var(--fg2);margin-top:0;margin-bottom:4px;">Impedance Reference</h3>
+    <table>
+      <tr><td class="proto">USB 2.0/3.0</td><td>90Ω dif.</td></tr>
+      <tr><td class="proto">HDMI</td><td>100Ω dif.</td></tr>
+      <tr><td class="proto">Ethernet</td><td>100Ω dif.</td></tr>
+      <tr><td class="proto">RF 50Ω</td><td>50Ω SE</td></tr>
+      <tr><td class="proto">DDR3/4</td><td>40Ω SE</td></tr>
+      <tr><td class="proto">PCIe</td><td>85Ω dif.</td></tr>
+      <tr><td class="proto">SATA</td><td>90Ω dif.</td></tr>
+      <tr><td class="proto">LVDS</td><td>100Ω dif.</td></tr>
+    </table>
+    <p style="margin-top:8px;font-size:10px;color:var(--fg2);">Cu: 0.5oz=0.015mm | 1oz (finished)=0.041mm | 2oz=0.070mm</p>
+  </div>
+  <div class="actions">
+    <button class="secondary" onclick="closeCalcPanel()">Close</button>
+    <button onclick="runWidthCalc()">Calculate</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// Global state
+// ═══════════════════════════════════════
+var analysisData = null;
+var currentStackup = {
+  er: 4.6,
+  copperThickness: 0.04064,
+  boardThickness: 1.6,
+  preset: '4L-1.6mm-jlcpcb-7628',
+  layers: {}
+};
+var STORAGE_KEY = 'impedance-calc-data';
+var STACKUP_STORAGE_KEY = 'impedance-calc-stackup';
+var SELECTED_STORAGE_KEY = 'impedance-calc-selected';
+var _lastPcbData = null;
+var selectedGroupKeys = {};
+
+// ═══════════════════════════════════════
+// Initialization — load data from EasyEDA via storage
+// ═══════════════════════════════════════
+window.addEventListener('load', function() {
+  loadSavedStackup().then(function() {
+    loadPCBData();
+  });
+});
+
+async function loadSavedStackup() {
+  try {
+    var saved = await eda.sys_Storage.getExtensionUserConfig(STACKUP_STORAGE_KEY);
+    if (saved && saved.preset) {
+      currentStackup.preset = saved.preset;
+    }
+  } catch(e) {}
+}
+
+async function loadPCBData() {
+  setStatus('Loading PCB data...');
+  try {
+    // Fetch data stored by dist/index.js
+    var data = await eda.sys_Storage.getExtensionUserConfig(STORAGE_KEY);
+    if (data && (data.lines || data.arcs)) {
+      onDataLoaded(data);
+    } else {
+      setStatus('No data found. Click "Load data".');
+    }
+  } catch(e) {
+    setStatus('Error loading: ' + (e.message || e));
+  }
+}
+
+function onDataLoaded(pcbData) {
+  _lastPcbData = pcbData;
+
+  // Get preset config
+  // Auto-select preset based on detected copper layer count
+  var detectedCount = pcbData.copperLayerCount || 0;
+  if (detectedCount > 0) {
+    var currentPreset = ImpedanceCalc.STACKUP_PRESETS[currentStackup.preset];
+    var currentExpectedLayers = currentPreset ? currentPreset.layers : 0;
+    if (detectedCount !== currentExpectedLayers) {
+      var autoKey = ImpedanceCalc.autoSelectPreset(detectedCount);
+      if (autoKey) {
+        currentStackup.preset = autoKey;
+        saveStackupToStorage();
+      }
+    }
+  }
+
+  var presetKey = currentStackup.preset || '4L-1.6mm-jlcpcb-7628';
+  var preset = ImpedanceCalc.STACKUP_PRESETS[presetKey];
+  var presetGaps = (preset && preset.gaps) ? preset.gaps : null;
+  var presetEr = (preset && preset.er) ? preset.er : 4.6;
+  var boardThickness = (preset && preset.boardThickness) ? preset.boardThickness : 1.6;
+  var outerCuT = (preset && preset.copperThickness) ? preset.copperThickness : 0.04064;
+  var innerCuT = (preset && preset.innerCopperThickness) ? preset.innerCopperThickness : 0.0152;
+  var presetGapEr = (preset && preset.gapEr) ? preset.gapEr : null;
+
+  // Always rebuild stackup from PCB data + preset
+  var autoStackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr);
+  autoStackup.preset = presetKey;
+  currentStackup = autoStackup;
+
+  // Check if preset layer count matches detected layers
+  var presetExpectedLayers = preset ? preset.layers : 0;
+  var detectedLayers = autoStackup.layerOrder ? autoStackup.layerOrder.length : 0;
+  var apiCopperCount = (autoStackup._debug && autoStackup._debug.apiCopperCount) ? autoStackup._debug.apiCopperCount : null;
+  var mismatchWarning = '';
+  // Prefer API copper count for mismatch check (more reliable)
+  var refLayerCount = apiCopperCount || detectedLayers;
+  if (presetExpectedLayers && refLayerCount !== presetExpectedLayers) {
+    mismatchWarning = ' ⚠ MISMATCH: preset expects ' + presetExpectedLayers + 'L but board has ' + refLayerCount + ' copper layers! Change the preset.';
+  }
+
+  // Show detected planes info
+  var planeInfo = [];
+  if (autoStackup.detectedPlanes) {
+    for (var pLayer in autoStackup.detectedPlanes) {
+      var pName = (autoStackup.layers[pLayer] || {}).name || ('Layer ' + pLayer);
+      planeInfo.push(pName + ' (' + autoStackup.detectedPlanes[pLayer] + ')');
+    }
+  }
+  var orderInfo = autoStackup.layerOrder ? autoStackup.layerOrder.join(' → ') : '';
+  if (planeInfo.length > 0) {
+    setStatus('Planes: ' + planeInfo.join(', ') + ' | Order: ' + orderInfo + mismatchWarning);
+  } else {
+    setStatus(analysisData.summary.totalSegments + ' segments | No ref planes detected | Order: ' + orderInfo);
+  }
+
+  // Calculate
+  analysisData = ImpedanceCalc.analyzeAll(pcbData, currentStackup);
+
+  // Detect cross-layer interferences (pass stackup so shielded crossings are excluded)
+  var crossingResults = ImpedanceCalc.detectCrossings(pcbData, analysisData.stackup);
+  analysisData.crossings = crossingResults;
+
+  renderAll();
+
+  // Show crossing warning banner if any found
+  var existingBanner = document.getElementById('crossing-banner');
+  if (existingBanner) existingBanner.remove();
+  if (crossingResults.length > 0) {
+    var banner = document.createElement('div');
+    banner.id = 'crossing-banner';
+    banner.style.cssText = 'padding:8px 16px;background:rgba(255,152,0,0.15);border:1px solid #FF9800;border-radius:6px;margin-bottom:12px;font-size:12px;color:#FF9800;';
+    banner.innerHTML = '<strong>⚠ ' + crossingResults.length + ' cross-layer interference(s) detected!</strong> ' +
+      'Traces on different layers cross or run parallel — impedance may be affected. ' +
+      '<button onclick="document.getElementById(\'btn-viz\').click()" style="background:#7209b7;color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;margin-left:6px;">Open Visualizer</button>';
+    var resultsArea = document.getElementById('results-area');
+    resultsArea.insertBefore(banner, resultsArea.firstChild);
+  }
+
+  // Show controls
+  ['layer-filter','search-box','btn-settings','btn-export','btn-widthcalc','btn-viz','target-z0','tolerance-pct','lbl-target','lbl-tol','lbl-pct'].forEach(function(id) {
+    document.getElementById(id).classList.remove('hidden');
+  });
+  document.getElementById('sidebar').classList.remove('hidden');
+  document.getElementById('drop-zone').classList.add('hidden');
+  document.getElementById('results-area').classList.remove('hidden');
+
+  setStatus(analysisData.summary.totalSegments + ' segments analyzed');
+  populateFilters();
+}
+
+// ═══════════════════════════════════════
+// Rendering
+// ═══════════════════════════════════════
+function renderAll() {
+  if (!analysisData) return;
+  renderSummaryCards();
+  renderTable();
+  renderNetSummary();
+}
+
+function getFilteredResults() {
+  var layerVal = document.getElementById('layer-filter').value;
+  var searchVal = (document.getElementById('search-box').value || '').toLowerCase();
+  return analysisData.results.filter(function(r) {
+    if (layerVal !== '__all__' && String(r.layer) !== layerVal) return false;
+    if (searchVal && r.net.toLowerCase().indexOf(searchVal) < 0) return false;
+    return true;
+  });
+}
+
+function getFilteredGroups() {
+  var filtered = getFilteredResults();
+  var groups = {};
+  for (var i = 0; i < filtered.length; i++) {
+    var r = filtered[i];
+    var key = r.net + '|' + r.layer + '|' + r.z0 + '|' + r.width;
+    if (!groups[key]) {
+      groups[key] = {
+        net: r.net, layerName: r.layerName, layer: r.layer,
+        type: r.type, width: r.width, h: r.h, model: r.model,
+        z0: r.z0, erEff: r.erEff, delay: r.delay,
+        totalLength: 0, count: 0
+      };
+    }
+    groups[key].totalLength += parseFloat(r.length) || 0;
+    groups[key].count++;
+  }
+  return groups;
+}
+
+function renderSummaryCards() {
+  var groups = getFilteredGroups();
+  var groupKeys = Object.keys(groups);
+  var tgtZ0 = parseFloat(document.getElementById('target-z0').value) || 50;
+  var tolPct = parseFloat(document.getElementById('tolerance-pct').value) || 10;
+  var zLow = tgtZ0 * (1 - tolPct / 100);
+  var zHigh = tgtZ0 * (1 + tolPct / 100);
+  var inTol = 0, outTol = 0;
+  var z0Min = Infinity, z0Max = -Infinity, z0Sum = 0, z0Count = 0;
+  var nets = {};
+  for (var i = 0; i < groupKeys.length; i++) {
+    var g = groups[groupKeys[i]];
+    nets[g.net] = true;
+    var z = parseFloat(g.z0);
+    if (isNaN(z)) continue;
+    if (z < z0Min) z0Min = z;
+    if (z > z0Max) z0Max = z;
+    z0Sum += z; z0Count++;
+    if (z >= zLow && z <= zHigh) inTol++; else outTol++;
+  }
+  var z0Avg = z0Count > 0 ? (z0Sum / z0Count).toFixed(1) : '-';
+  if (z0Min === Infinity) z0Min = '-';
+  if (z0Max === -Infinity) z0Max = '-';
+  var html =
+    '<div class="card"><div class="value">' + groupKeys.length + '</div><div class="label">Groups</div></div>' +
+    '<div class="card"><div class="value">' + Object.keys(nets).length + '</div><div class="label">Nets</div></div>' +
+    '<div class="card"><div class="value" style="color:' + (z0Min !== '-' ? z0Gradient(parseFloat(z0Min), tgtZ0, tolPct) : 'var(--fg2)') + '">' + z0Min + 'Ω</div><div class="label">Z₀ Min</div></div>' +
+    '<div class="card"><div class="value" style="color:' + (z0Max !== '-' ? z0Gradient(parseFloat(z0Max), tgtZ0, tolPct) : 'var(--fg2)') + '">' + z0Max + 'Ω</div><div class="label">Z₀ Max</div></div>' +
+    '<div class="card"><div class="value" style="color:' + (z0Avg !== '-' ? z0Gradient(parseFloat(z0Avg), tgtZ0, tolPct) : 'var(--fg2)') + '">' + z0Avg + 'Ω</div><div class="label">Z₀ Avg</div></div>' +
+    '<div class="card"><div class="value" style="color:var(--green)">' + inTol + '</div><div class="label">✓ Within ' + tgtZ0 + 'Ω ±' + tolPct + '%</div></div>' +
+    '<div class="card"><div class="value" style="color:var(--red)">' + outTol + '</div><div class="label">✗ Outside</div></div>';
+  document.getElementById('summary-cards').innerHTML = html;
+}
+
+function renderTable() {
+  var tgtZ0 = parseFloat(document.getElementById('target-z0').value) || 50;
+  var tolPct = parseFloat(document.getElementById('tolerance-pct').value) || 10;
+  var zLow = tgtZ0 * (1 - tolPct / 100);
+  var zHigh = tgtZ0 * (1 + tolPct / 100);
+
+  var groups = getFilteredGroups();
+
+  // Sort groups: by net name, then layer, then z0
+  var groupKeys = Object.keys(groups).sort(function(a, b) {
+    var ga = groups[a], gb = groups[b];
+    if (ga.net !== gb.net) return ga.net < gb.net ? -1 : 1;
+    if (ga.layer !== gb.layer) return ga.layer - gb.layer;
+    return ga.z0 - gb.z0;
+  });
+
+  var html = '';
+  for (var gi = 0; gi < groupKeys.length; gi++) {
+    var gKey = groupKeys[gi];
+    var g = groups[gKey];
+    var z0Val = parseFloat(g.z0);
+    var z0Style = '';
+    if (!isNaN(z0Val)) {
+      z0Style = 'color:' + z0Gradient(z0Val, tgtZ0, tolPct) + ';';
+    }
+    var lenStr = (Math.round(g.totalLength * 10000) / 10000).toFixed(4);
+    var checked = selectedGroupKeys[gKey] ? ' checked' : '';
+    html += '<tr>' +
+      '<td style="text-align:center"><input type="checkbox" class="row-select" data-key="' + esc(gKey) + '"' + checked + '></td>' +
+      '<td><strong>' + esc(g.net) + '</strong></td>' +
+      '<td>' + esc(g.layerName) + '</td>' +
+      '<td style="text-align:center;font-size:11px;color:var(--fg2)">' + g.layer + '</td>' +
+      '<td>' + g.type + '</td>' +
+      '<td style="text-align:center">' + g.width + '</td>' +
+      '<td style="text-align:center;color:var(--accent)">' + (g.h || '-') + '</td>' +
+      '<td style="text-align:center;color:var(--fg2)">' + g.count + '</td>' +
+      '<td style="text-align:center">' + lenStr + '</td>' +
+      '<td style="font-size:11px">' + g.model + '</td>' +
+      '<td class="z0-cell" style="text-align:center;' + z0Style + '">' + g.z0 + ' Ω</td>' +
+      '<td style="text-align:center">' + g.erEff + '</td>' +
+      '<td style="text-align:center">' + g.delay + '</td>' +
+      '</tr>';
+  }
+  document.getElementById('results-table').innerHTML = html;
+  updateVizSelectedButton();
+}
+
+function renderNetSummary() {
+  var ns = analysisData.netSummary;
+  var keys = Object.keys(ns).sort(function(a, b) { return ns[b].count - ns[a].count; });
+  var html = '';
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var n = ns[key];
+    html += '<div class="sb-row">' +
+      '<span class="net-name" title="' + esc(key) + '">' + esc(key) + '</span>' +
+      '<span class="z0-badge" style="background:' + z0Color(n.z0Avg) + '">' + n.z0Avg + 'Ω</span>' +
+      '</div>';
+  }
+  document.getElementById('net-summary').innerHTML = html;
+}
+
+function populateFilters() {
+  var nets = {};
+  var layers = {};
+  analysisData.results.forEach(function(r) {
+    nets[r.net] = true;
+    layers[r.layer] = r.layerName;
+  });
+
+  var laySel = document.getElementById('layer-filter');
+  laySel.innerHTML = '<option value="__all__">All layers</option>';
+  // Use physical stackup order (not string sort which puts Bottom between Inner5 and Inner6)
+  var layerKeys = currentStackup && currentStackup.layerOrder ? currentStackup.layerOrder.map(String).filter(function(k) { return layers[k]; }) : Object.keys(layers).sort(function(a, b) { return Number(a) - Number(b); });
+  Object.keys(layers).forEach(function(k) { if (layerKeys.indexOf(k) === -1) layerKeys.push(k); });
+  layerKeys.forEach(function(l) {
+    laySel.innerHTML += '<option value="' + l + '">' + esc(layers[l]) + '</option>';
+  });
+}
+
+// ═══════════════════════════════════════
+// Filters and interaction
+// ═══════════════════════════════════════
+document.getElementById('layer-filter').addEventListener('change', renderAll);
+
+// Debounced search — avoids rebuilding table on every keystroke
+var _searchTimer = null;
+document.getElementById('search-box').addEventListener('input', function() {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(renderAll, 250);
+});
+
+// Target Z₀ / tolerance — re-render table and summary on change
+document.getElementById('target-z0').addEventListener('change', renderAll);
+document.getElementById('tolerance-pct').addEventListener('change', renderAll);
+
+document.getElementById('btn-manual-load').addEventListener('click', loadPCBData);
+
+
+
+// ═══════════════════════════════════════
+// Trace selection
+// ═══════════════════════════════════════
+function updateVizSelectedButton() {
+  var count = 0;
+  for (var k in selectedGroupKeys) { if (selectedGroupKeys[k]) count++; }
+  var btn = document.getElementById('btn-viz-selected');
+  var btnClear = document.getElementById('btn-clear-selected');
+  if (count > 0) {
+    btn.textContent = '\uD83C\uDFA8 View Selected (' + count + ')';
+    btn.classList.remove('hidden');
+    btnClear.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+    btnClear.classList.add('hidden');
+  }
+}
+
+document.getElementById('results-table').addEventListener('change', function(e) {
+  if (e.target.classList.contains('row-select')) {
+    var key = e.target.getAttribute('data-key');
+    if (e.target.checked) {
+      selectedGroupKeys[key] = true;
+    } else {
+      delete selectedGroupKeys[key];
+    }
+    var allBoxes = document.querySelectorAll('.row-select');
+    var allChecked = allBoxes.length > 0;
+    for (var i = 0; i < allBoxes.length; i++) {
+      if (!allBoxes[i].checked) { allChecked = false; break; }
+    }
+    document.getElementById('select-all').checked = allChecked;
+    updateVizSelectedButton();
+  }
+});
+
+document.getElementById('select-all').addEventListener('change', function() {
+  var checked = this.checked;
+  var boxes = document.querySelectorAll('.row-select');
+  for (var i = 0; i < boxes.length; i++) {
+    boxes[i].checked = checked;
+    var key = boxes[i].getAttribute('data-key');
+    if (checked) {
+      selectedGroupKeys[key] = true;
+    } else {
+      delete selectedGroupKeys[key];
+    }
+  }
+  updateVizSelectedButton();
+});
+
+document.getElementById('btn-clear-selected').addEventListener('click', function() {
+  selectedGroupKeys = {};
+  document.getElementById('select-all').checked = false;
+  var boxes = document.querySelectorAll('.row-select');
+  for (var i = 0; i < boxes.length; i++) { boxes[i].checked = false; }
+  updateVizSelectedButton();
+});
+
+document.getElementById('btn-viz-selected').addEventListener('click', async function() {
+  var filterSet = {};
+  var keys = Object.keys(selectedGroupKeys);
+  for (var i = 0; i < keys.length; i++) {
+    if (!selectedGroupKeys[keys[i]]) continue;
+    var parts = keys[i].split('|');
+    // key = net|layer|z0|width → match pcbData by net|layer|width
+    var matchKey = parts[0] + '|' + parts[1] + '|' + parts[3];
+    filterSet[matchKey] = true;
+  }
+  if (Object.keys(filterSet).length === 0) return;
+  var filteredData = JSON.parse(JSON.stringify(_lastPcbData));
+  filteredData.lines = (filteredData.lines || []).filter(function(l) {
+    return filterSet[(l.net || '(no net)') + '|' + l.layer + '|' + (Math.round(l.width * 1000) / 1000)];
+  });
+  filteredData.arcs = (filteredData.arcs || []).filter(function(a) {
+    return filterSet[(a.net || '(no net)') + '|' + a.layer + '|' + (Math.round(a.width * 1000) / 1000)];
+  });
+  try {
+    await eda.sys_Storage.setExtensionUserConfig(SELECTED_STORAGE_KEY, filteredData);
+    eda.sys_IFrame.openIFrame(
+      '/iframe/trace-viz.html',
+      1200, 800,
+      'trace-impedance-viz-selected',
+      { maximizeButton: true, minimizeButton: true, title: 'Selected Traces Visualization' }
+    );
+  } catch(e) {
+    setStatus('Error opening visualization: ' + (e.message || e));
+  }
+});
+
+// ═══════════════════════════════════════
+// Export CSV
+// ═══════════════════════════════════════
+document.getElementById('btn-export').addEventListener('click', function() {
+  if (!analysisData) return;
+  var csv = 'Net,Layer,LayerID,Type,Width(mm),H(mm),Segments,Length(mm),Model,Z0(Ohm),ErEff,Delay(ps/mm)\n';
+  // Group for CSV export too
+  var csvGroups = {};
+  analysisData.results.forEach(function(r) {
+    var key = r.net + '|' + r.layer + '|' + r.z0 + '|' + r.width;
+    if (!csvGroups[key]) {
+      csvGroups[key] = { net: r.net, layerName: r.layerName, layer: r.layer, type: r.type, width: r.width, h: r.h || '', model: r.model, z0: r.z0, erEff: r.erEff, delay: r.delay, totalLength: 0, count: 0 };
+    }
+    csvGroups[key].totalLength += parseFloat(r.length) || 0;
+    csvGroups[key].count++;
+  });
+  Object.keys(csvGroups).sort().forEach(function(k) {
+    var g = csvGroups[k];
+    csv += '"' + g.net + '",' + g.layerName + ',' + g.layer + ',' + g.type + ',' + g.width + ',' + g.h + ',' + g.count + ',' + (Math.round(g.totalLength * 10000) / 10000) + ',' + g.model + ',' + g.z0 + ',' + g.erEff + ',' + g.delay + '\n';
+  });
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  var link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'trace_impedance.csv';
+  link.click();
+});
+
+// ═══════════════════════════════════════
+// Visualize — open trace-viz.html in a new iframe
+// ═══════════════════════════════════════
+document.getElementById('btn-viz').addEventListener('click', async function() {
+  // Clear any leftover selected data so trace-viz shows all traces
+  try { await eda.sys_Storage.deleteExtensionUserConfig(SELECTED_STORAGE_KEY); } catch(e) {}
+  try {
+    eda.sys_IFrame.openIFrame(
+      '/iframe/trace-viz.html',
+      1200,
+      800,
+      'trace-impedance-viz',
+      {
+        maximizeButton: true,
+        minimizeButton: true,
+        title: 'Trace Impedance Visualization'
+      }
+    );
+  } catch(e) {
+    // Fallback: try window.open
+    window.open('/iframe/trace-viz.html', '_blank', 'width=1200,height=800');
+  }
+});
+
+// ═══════════════════════════════════════
+// Settings
+// ═══════════════════════════════════════
+document.getElementById('btn-settings').addEventListener('click', function() {
+  // Populate preset dropdown
+  var presetSel = document.getElementById('cfg-preset');
+  presetSel.innerHTML = '';
+  var presets = ImpedanceCalc.STACKUP_PRESETS;
+  for (var pk in presets) {
+    var opt = document.createElement('option');
+    opt.value = pk;
+    opt.textContent = presets[pk].label;
+    if (currentStackup.preset === pk) opt.selected = true;
+    presetSel.appendChild(opt);
+  }
+
+  function updatePresetInfo() {
+    var p = presets[presetSel.value];
+    if (!p) return;
+    var info = 'Board: ' + p.boardThickness + 'mm | εr: ' + p.er + ' | Outer Cu: ' + (p.copperThickness * 1000).toFixed(1) + 'µm (1oz finished) | Inner Cu: ' + ((p.innerCopperThickness || 0.0152) * 1000).toFixed(1) + 'µm';
+    if (p.gaps) {
+      info += '<br>Gaps: ' + p.gaps.map(function(g) { return g.toFixed(4) + 'mm'; }).join(' / ');
+    }
+    document.getElementById('preset-info').innerHTML = info;
+  }
+  updatePresetInfo();
+  presetSel.onchange = updatePresetInfo;
+
+  var lcHtml = '';
+  // Show detected planes
+  if (currentStackup.detectedPlanes && Object.keys(currentStackup.detectedPlanes).length > 0) {
+    lcHtml += '<div style="margin-top:12px;padding:8px 12px;background:rgba(76,201,240,0.1);border:1px solid var(--accent);border-radius:6px;font-size:12px;">';
+    lcHtml += '<strong>\u26a1 Detected reference planes:</strong><br>';
+    for (var pId in currentStackup.detectedPlanes) {
+      var pName = (currentStackup.layers[pId] || {}).name || ('Layer ' + pId);
+      lcHtml += '&bull; ' + esc(pName) + ' \u2014 net: ' + esc(currentStackup.detectedPlanes[pId]) + '<br>';
+    }
+    lcHtml += '</div>';
+  } else {
+    lcHtml += '<div style="margin-top:12px;padding:8px 12px;background:rgba(244,67,54,0.1);border:1px solid var(--red);border-radius:6px;font-size:12px;color:var(--red);">';
+    lcHtml += '<strong>\u26a0 No copper pours detected.</strong> H values are defaults. Add a copper pour on the GND layer and recalculate.';
+    lcHtml += '</div>';
+  }
+
+  // Visual stackup cross-section
+  if (currentStackup.layerOrder && currentStackup.layerOrder.length > 1) {
+    lcHtml += '<div style="margin-top:12px;padding:10px 12px;background:rgba(76,201,240,0.05);border:1px solid var(--border);border-radius:6px;font-size:12px;">';
+    lcHtml += '<strong>\ud83d\udcd0 Stackup Cross-Section:</strong><br><div style="margin-top:6px;font-family:monospace;font-size:11px;line-height:1.8;">';
+    for (var vi = 0; vi < currentStackup.layerOrder.length; vi++) {
+      var vLayerId = currentStackup.layerOrder[vi];
+      var vLayer = currentStackup.layers[vLayerId];
+      if (!vLayer) continue;
+      var isPlane = vLayer.isPlane;
+      var layerColor = isPlane ? 'var(--green)' : 'var(--accent)';
+      var hInfo = vLayer.type ? ' [H=' + vLayer.h + 'mm to plane]' : '';
+      lcHtml += '<div style="color:' + layerColor + ';font-weight:600;">\u2588\u2588\u2588 ' + esc(vLayer.name) + (isPlane ? ' [PLANE: ' + esc(vLayer.planeNet || '') + ']' : hInfo) + '</div>';
+      // Show dielectric gap between this layer and next
+      if (vi < currentStackup.layerOrder.length - 1 && currentStackup.spacings) {
+        var gapMm = currentStackup.spacings[vi];
+        if (gapMm !== undefined) {
+          var barLen = Math.max(1, Math.min(20, Math.round(gapMm * 30)));
+          var bar = '';
+          for (var b = 0; b < barLen; b++) bar += '\u2591';
+          var gapErLabel = '';
+          if (currentStackup.gapErValues && currentStackup.gapErValues[vi] !== undefined) {
+            gapErLabel = ' \u03b5r=' + currentStackup.gapErValues[vi].toFixed(2);
+          }
+          lcHtml += '<div style="color:var(--fg2);padding-left:12px;">\u2502 ' + bar + '  ' + gapMm.toFixed(4) + ' mm' + gapErLabel + '</div>';
+        }
+      }
+    }
+    lcHtml += '</div></div>';
+  }
+
+  // Read-only layer list using physical order
+  lcHtml += '<div style="margin-top:12px;"><label style="font-size:13px;color:var(--fg2);">Layers (physical order):</label>';
+  var orderArr = currentStackup.layerOrder || [];
+  for (var oi = 0; oi < orderArr.length; oi++) {
+    var layerId = orderArr[oi];
+    var lc = currentStackup.layers[layerId];
+    if (!lc) continue;
+    var planeTag = lc.isPlane ? ' <span style="color:var(--green);font-size:10px;">\u2b24 PLANE</span>' : '';
+    var typeLabel = lc.type ? lc.type : 'ref plane';
+    var hLabel = lc.type ? '<span style="font-size:11px;color:var(--accent);font-weight:600;">H=' + lc.h + 'mm</span>' : '<span style="font-size:11px;color:var(--fg2);">\u2014</span>';
+    lcHtml += '<div style="display:flex;gap:8px;margin-top:6px;align-items:center;padding:4px 8px;background:var(--bg3);border-radius:4px;">' +
+      '<span style="min-width:160px;font-size:12px;font-weight:600;">' + esc(lc.name) + planeTag + '</span>' +
+      '<span style="font-size:11px;color:var(--fg2);">' + typeLabel + '</span>' +
+      hLabel +
+      '<span style="font-size:11px;color:var(--fg2);">\u03b5r=' + lc.er + '</span>' +
+      '</div>';
+  }
+  lcHtml += '</div>';
+
+  document.getElementById('layer-configs').innerHTML = lcHtml;
+
+  document.getElementById('settings-panel').classList.add('visible');
+  document.getElementById('overlay').classList.add('visible');
+});
+
+document.getElementById('overlay').addEventListener('click', closeSettings);
+
+function closeSettings() {
+  document.getElementById('settings-panel').classList.remove('visible');
+  document.getElementById('overlay').classList.remove('visible');
+}
+
+function saveSettings() {
+  currentStackup.preset = document.getElementById('cfg-preset').value;
+
+  closeSettings();
+
+  // Save preset choice to persistent storage
+  saveStackupToStorage();
+
+  // Recalculate with new preset
+  if (_lastPcbData) {
+    onDataLoaded(_lastPcbData);
+  } else {
+    loadPCBData();
+  }
+}
+
+async function saveStackupToStorage() {
+  try {
+    await eda.sys_Storage.setExtensionUserConfig(STACKUP_STORAGE_KEY, {
+      preset: currentStackup.preset
+    });
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════
+// Width Calculator
+// ═══════════════════════════════════════
+document.getElementById('btn-widthcalc').addEventListener('click', openCalcPanel);
+
+function openCalcPanel() {
+  var sel = document.getElementById('calc-layer');
+  sel.innerHTML = '';
+  if (currentStackup && currentStackup.layerOrder) {
+    currentStackup.layerOrder.forEach(function(lid) {
+      var lc = currentStackup.layers[lid];
+      if (!lc || !lc.type) return; // skip pure plane layers
+      var opt = document.createElement('option');
+      opt.value = lid;
+      opt.textContent = lc.name + ' (' + lc.type + ')';
+      sel.appendChild(opt);
+    });
+  }
+  sel.onchange = updateCalcLayerInfo;
+  updateCalcLayerInfo();
+  document.getElementById('calc-result').innerHTML = '';
+  document.getElementById('calc-panel').classList.add('visible');
+  document.getElementById('calc-overlay').classList.add('visible');
+}
+
+function closeCalcPanel() {
+  document.getElementById('calc-panel').classList.remove('visible');
+  document.getElementById('calc-overlay').classList.remove('visible');
+}
+
+document.getElementById('calc-overlay').addEventListener('click', closeCalcPanel);
+
+function updateCalcLayerInfo() {
+  var lid = document.getElementById('calc-layer').value;
+  var lc = currentStackup.layers && currentStackup.layers[lid];
+  if (!lc) { document.getElementById('calc-layer-info').innerHTML = ''; return; }
+  var info = '<strong>Model:</strong> ' + esc(lc.type) +
+    ' &nbsp;|&nbsp; <strong>H:</strong> ' + lc.h + ' mm' +
+    ' &nbsp;|&nbsp; <strong>εr:</strong> ' + lc.er;
+  if (lc.b) info += ' &nbsp;|&nbsp; <strong>B:</strong> ' + lc.b + ' mm';
+  var cuT = lc.copperT || currentStackup.copperThickness || 0.04064;
+  info += ' &nbsp;|&nbsp; <strong>Cu:</strong> ' + (cuT * 1000).toFixed(1) + ' µm (' + (cuT <= 0.02 ? '0.5oz' : '1oz') + ')';
+  document.getElementById('calc-layer-info').innerHTML = info;
+}
+
+function runWidthCalc() {
+  var lid = document.getElementById('calc-layer').value;
+  var lc = currentStackup.layers && currentStackup.layers[lid];
+  if (!lc || !lc.type) return;
+  var tgtZ0 = parseFloat(document.getElementById('calc-target-z0').value) || 50;
+  var cuT = lc.copperT || currentStackup.copperThickness || 0.04064;
+  var result = ImpedanceCalc.calcWidthForZ0(tgtZ0, lc.h, lc.b, cuT, lc.er, lc.type);
+  var el = document.getElementById('calc-result');
+  if (result.width !== null && result.width !== undefined) {
+    var widthMils = result.width / 0.0254;
+    var warning = '';
+    if (widthMils < 4) {
+      warning = '<div style="margin-top:8px;padding:8px 12px;background:rgba(244,67,54,0.15);border:1px solid var(--red);border-radius:6px;font-size:12px;color:var(--red);">' +
+        '<strong>⚠ Warning:</strong> Trace width (' + widthMils.toFixed(1) + ' mils) is below <strong>4 mils</strong> — most PCB manufacturers (including JLCPCB) may not be able to fabricate this. Consider a lower target Z₀ or a different stackup.' +
+        '</div>';
+    }
+    el.innerHTML =
+      '<div style="font-size:28px;font-weight:700;color:var(--accent);">' + result.width + ' mm</div>' +
+      '<div style="color:var(--fg2);font-size:13px;">(' + widthMils.toFixed(1) + ' mils)</div>' +
+      '<div style="font-size:12px;color:var(--fg2);margin-top:6px;">Achieved Z₀ = ' + result.z0 + ' Ω (' + esc(result.model) + ')</div>' +
+      warning;
+  } else {
+    el.innerHTML = '<div style="color:var(--red);">' + esc(result.error || 'Cannot calculate') + '</div>';
+  }
+}
+
+// ═══════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════
+function z0Gradient(z0, target, tolPct) {
+  if (z0 === null || z0 === undefined || isNaN(z0)) return '#888';
+  var halfRange = target * tolPct / 100;
+  var spread = halfRange * 2;
+  if (spread < 0.1) spread = 1;
+  var t = (z0 - target) / spread;
+  t = Math.max(-1, Math.min(1, t));
+  var pos = (t + 1) / 2;
+  var r, g, b;
+  if (pos < 0.25) {
+    var s = pos / 0.25;
+    r = Math.round(20 + 10 * s); g = Math.round(40 + 40 * s); b = Math.round(140 + 80 * s);
+  } else if (pos < 0.5) {
+    var s = (pos - 0.25) / 0.25;
+    r = Math.round(30 + 30 * s); g = Math.round(80 + 140 * s); b = Math.round(220 - 190 * s);
+  } else if (pos < 0.75) {
+    var s = (pos - 0.5) / 0.25;
+    r = Math.round(60 + 160 * s); g = Math.round(220 - 80 * s); b = Math.round(30);
+  } else {
+    var s = (pos - 0.75) / 0.25;
+    r = Math.round(220 + 20 * s); g = Math.round(140 - 100 * s); b = Math.round(30 - 10 * s);
+  }
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+function z0Color(z0) {
+  var target = parseFloat(document.getElementById('target-z0').value) || 50;
+  var tolPct = parseFloat(document.getElementById('tolerance-pct').value) || 10;
+  return z0Gradient(z0, target, tolPct);
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+</script>
+</body>
+</html>

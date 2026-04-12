@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace Impedance Visualization</title>
+<script src="/iframe/impedance-calc.js"></script>
+<style>
+:root {
+  --bg: #1a1a2e; --bg2: #16213e; --bg3: #0f3460; --fg: #eee; --fg2: #aaa;
+  --card: #16213e; --border: #0f3460; --input-bg: #0d1b2a; --input-fg: #eee;
+  --accent: #4cc9f0; --accent2: #7209b7;
+  --green: #4CAF50; --blue: #2196F3; --purple: #9C27B0; --orange: #FF9800; --red: #F44336;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; }
+
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.toolbar h1 { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.toolbar select, .toolbar input { font-size: 12px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--input-bg); color: var(--input-fg); }
+.toolbar button { font-size: 12px; padding: 4px 12px; border-radius: 4px; border: none; background: var(--accent); color: #fff; font-weight: 500; cursor: pointer; }
+.toolbar button:hover { opacity: 0.85; }
+.toolbar button.secondary { background: transparent; border: 1px solid var(--border); color: var(--fg2); }
+.toolbar .spacer { flex: 1; }
+.toolbar label { font-size: 12px; color: var(--fg2); }
+
+.canvas-wrap { position: relative; width: 100%; height: calc(100vh - 44px); }
+canvas { display: block; width: 100%; height: 100%; }
+
+/* Loading overlay */
+.loading-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: var(--bg); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; z-index: 999;
+  transition: opacity 0.3s ease;
+}
+.loading-overlay.hidden { opacity: 0; pointer-events: none; }
+.loading-spinner {
+  width: 48px; height: 48px; border: 4px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-overlay span { margin-top: 16px; font-size: 13px; color: var(--fg2); }
+
+/* Legend floating panel */
+.legend {
+  position: absolute; bottom: 16px; left: 16px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 16px; font-size: 11px; min-width: 180px;
+  opacity: 0.95;
+}
+.legend h4 { font-size: 12px; margin-bottom: 6px; }
+.legend-bar { width: 100%; height: 14px; border-radius: 3px; margin: 4px 0; }
+.legend-labels { display: flex; justify-content: space-between; font-size: 10px; color: var(--fg2); }
+
+/* Info panel */
+.info-panel {
+  position: absolute; top: 8px; right: 8px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; font-size: 12px; min-width: 200px;
+  opacity: 0.95; max-height: calc(100vh - 70px); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.info-panel h4 { font-size: 12px; margin-bottom: 6px; color: var(--accent); flex-shrink: 0; }
+.info-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.info-row .lbl { color: var(--fg2); }
+
+/* Crossing warning list */
+.crossing-list { margin-top: 8px; overflow-y: auto; flex: 1; min-height: 0; }
+.crossing-item { padding: 4px 6px; margin: 2px 0; border-radius: 4px; background: rgba(244,67,54,0.15); border-left: 3px solid var(--red); font-size: 11px; cursor: pointer; }
+.crossing-item:hover { opacity: 0.8; }
+.crossing-item.selected { outline: 2px solid #fff; }
+.crossing-item.parallel { border-left-color: var(--orange); background: rgba(255,152,0,0.12); }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>🎨 Trace Visualization</h1>
+  <label>Target Z₀:</label>
+  <input type="number" id="target-z0" value="50" min="1" max="300" step="1" style="width:60px;">
+  <label>Ω ±</label>
+  <input type="number" id="tolerance" value="10" min="1" max="100" step="1" style="width:50px;">
+  <label>%</label>
+  <select id="viz-net-filter">
+    <option value="__all__">All nets</option>
+  </select>
+  <select id="viz-layer-filter">
+    <option value="__all__">All layers</option>
+  </select>
+  <label><input type="checkbox" id="chk-vias" checked> Show vias</label>
+  <label style="margin-left:6px;">Min Z₀:</label>
+  <input type="number" id="min-z0" value="0" min="0" max="300" step="1" style="width:55px;">
+  <label>Ω</label>
+
+  <div class="spacer"></div>
+  <button id="btn-fit" class="secondary">⊞ Fit</button>
+</div>
+
+<div class="canvas-wrap">
+  <canvas id="pcb-canvas"></canvas>
+
+  <!-- Loading overlay -->
+  <div class="loading-overlay" id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <span>Loading PCB data…</span>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <h4>Impedance Color Scale</h4>
+    <div class="legend-bar" id="legend-bar"></div>
+    <div class="legend-labels">
+      <span id="legend-min">0Ω</span>
+      <span id="legend-target">50Ω</span>
+      <span id="legend-max">100Ω</span>
+    </div>
+    <div style="margin-top:6px;font-size:10px;">
+      <span style="color:#4CAF50;">■</span> Within tolerance &nbsp;
+      <span style="color:#1e88e5;">■</span> Below &nbsp;
+      <span style="color:#F44336;">■</span> Above
+    </div>
+    <div style="margin-top:4px;font-size:10px;">
+      <span style="color:#F44336;font-weight:bold;">✕</span> Crossing &nbsp;
+      <span style="color:#FF9800;">▲</span> Parallel &nbsp;
+      <span style="color:#9C27B0;">●</span> Via
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="info-panel" id="info-panel">
+    <h4>📊 Statistics</h4>
+    <div id="stats-content" style="flex-shrink:0;">Loading...</div>
+    <div style="margin-top:8px;margin-bottom:4px;font-size:11px;flex-shrink:0;">
+      <label><input type="checkbox" id="chk-warn-crossings" checked> ✕ Crossings</label>
+      <label style="margin-left:8px;"><input type="checkbox" id="chk-warn-parallel" checked> ≈ Parallel</label>
+    </div>
+    <div id="crossings-content" style="overflow-y:auto;flex:1;min-height:0;"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// State
+// ═══════════════════════════════════════
+var pcbData = null;
+var analysisResults = null;
+var crossings = [];
+var stackup = null;
+
+var targetZ0 = 50;
+var tolerancePct = 10;
+
+// Canvas state
+var canvas, ctx;
+var viewX = 0, viewY = 0, viewScale = 1;
+var isDragging = false, dragStartX = 0, dragStartY = 0;
+var mouseDownX = 0, mouseDownY = 0; // original mousedown position for click detection
+var hoveredTrace = null;
+var lastMouseX = 0, lastMouseY = 0;
+var selectedCrossing = null; // { netA, layerA, netB, layerB }
+
+var STORAGE_KEY = 'impedance-calc-data';
+var STACKUP_STORAGE_KEY = 'impedance-calc-stackup';
+
+// ═══════════════════════════════════════
+// Adjacent layer crossing filter
+// ═══════════════════════════════════════
+function getAdjacentLayerGroup(layerIdStr) {
+  if (!stackup || !stackup.layerOrder) return null;
+  var layerId = Number(layerIdStr);
+  var order = stackup.layerOrder;
+  var pos = order.indexOf(layerId);
+  if (pos === -1) return null;
+  var group = [layerId];
+  if (pos > 0) group.push(order[pos - 1]);
+  if (pos < order.length - 1) group.push(order[pos + 1]);
+  return group;
+}
+
+function areAdjacentLayers(layerA, layerB) {
+  if (!stackup || !stackup.layerOrder) return true;
+  var order = stackup.layerOrder;
+  var posA = order.indexOf(Number(layerA));
+  var posB = order.indexOf(Number(layerB));
+  if (posA === -1 || posB === -1) return true;
+  return Math.abs(posA - posB) <= 1;
+}
+
+function getFilteredCrossings() {
+  var netFilter = document.getElementById('viz-net-filter').value;
+  var layerFilter = document.getElementById('viz-layer-filter').value;
+  var showCross = document.getElementById('chk-warn-crossings').checked;
+  var showParallel = document.getElementById('chk-warn-parallel').checked;
+  return crossings.filter(function(c) {
+    if (netFilter !== '__all__') {
+      if (c.segA.net !== netFilter && c.segB.net !== netFilter) return false;
+    }
+    // Filter by crossing type
+    if (c.crossType === 'crossing' && !showCross) return false;
+    if (c.crossType === 'parallel' && !showParallel) return false;
+    // Only show crossings between adjacent layers (non-adjacent = shielded visually)
+    if (!areAdjacentLayers(c.segA.layer, c.segB.layer)) return false;
+    // Skip crossings involving GND nets
+    if (c.segA.net === 'GND' || c.segB.net === 'GND') return false;
+    if (layerFilter !== '__all__') {
+      var selLayer = Number(layerFilter);
+      if (c.segA.layer !== selLayer && c.segB.layer !== selLayer) return false;
+    }
+    return true;
+  });
+}
+
+// ═══════════════════════════════════════
+// Color mapping
+// ═══════════════════════════════════════
+function z0ToColor(z0, target, tolPct) {
+  if (z0 === null || z0 === undefined || isNaN(z0)) return 'rgba(128,128,128,0.4)';
+
+  var low = target * (1 - tolPct / 100);
+  var high = target * (1 + tolPct / 100);
+  var halfRange = target * tolPct / 100;
+
+  // Continuous gradient: deep blue → blue → green → red → deep red
+  // Map z0 to a normalized position: 0 = 2x below, 0.5 = target, 1 = 2x above
+  // The tolerance zone maps to ~0.35–0.65
+  var spread = halfRange * 2; // how far from target until max color
+  if (spread < 0.1) spread = 1;
+  var t = (z0 - target) / spread; // -1 to +1 range (clamp)
+  t = Math.max(-1, Math.min(1, t));
+  // Remap to 0..1: -1→0, 0→0.5, +1→1
+  var pos = (t + 1) / 2;
+
+  var r, g, b;
+  if (pos < 0.25) {
+    // Deep blue → blue
+    var s = pos / 0.25;
+    r = Math.round(20 + 10 * s);
+    g = Math.round(40 + 40 * s);
+    b = Math.round(140 + 80 * s);
+  } else if (pos < 0.5) {
+    // Blue → green
+    var s = (pos - 0.25) / 0.25;
+    r = Math.round(30 - 10 * s + 40 * s);
+    g = Math.round(80 + 140 * s);
+    b = Math.round(220 - 190 * s);
+  } else if (pos < 0.75) {
+    // Green → red
+    var s = (pos - 0.5) / 0.25;
+    r = Math.round(60 + 160 * s);
+    g = Math.round(220 - 160 * s);
+    b = Math.round(30 + 10 * s);
+  } else {
+    // Red → deep red
+    var s = (pos - 0.75) / 0.25;
+    r = Math.round(220 + 35 * s);
+    g = Math.round(60 - 35 * s);
+    b = Math.round(40 - 15 * s);
+  }
+
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+function z0ToGradientColor(z0, minZ, maxZ) {
+  // Continuous color scale: blue(low) → green(mid) → red(high)
+  if (z0 === null || z0 === undefined || isNaN(z0)) return 'rgba(128,128,128,0.4)';
+  var range = maxZ - minZ;
+  if (range < 0.1) range = 1;
+  var t = (z0 - minZ) / range;
+  t = Math.max(0, Math.min(1, t));
+
+  var r, g, b;
+  if (t < 0.5) {
+    // Blue to Green
+    var s = t * 2;
+    r = Math.round(30 * (1 - s));
+    g = Math.round(80 + 140 * s);
+    b = Math.round(200 * (1 - s));
+  } else {
+    // Green to Red
+    var s = (t - 0.5) * 2;
+    r = Math.round(80 + 175 * s);
+    g = Math.round(220 * (1 - s));
+    b = Math.round(30 * (1 - s));
+  }
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+// ═══════════════════════════════════════
+// Drawing
+// ═══════════════════════════════════════
+function worldToScreen(wx, wy) {
+  var ch = canvas.height / (window.devicePixelRatio || 1);
+  return {
+    x: (wx - viewX) * viewScale,
+    y: ch - (wy - viewY) * viewScale
+  };
+}
+
+function screenToWorld(sx, sy) {
+  var ch = canvas.height / (window.devicePixelRatio || 1);
+  return {
+    x: sx / viewScale + viewX,
+    y: (ch - sy) / viewScale + viewY
+  };
+}
+
+function draw() {
+  if (!ctx || !analysisResults) return;
+
+  var w = canvas.width;
+  var h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Background
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, w, h);
+
+  // Draw grid
+  drawGrid(w, h);
+
+  var netFilter = document.getElementById('viz-net-filter').value;
+  var layerFilter = document.getElementById('viz-layer-filter').value;
+  var showCrossings = document.getElementById('chk-warn-crossings').checked || document.getElementById('chk-warn-parallel').checked;
+  var showVias = document.getElementById('chk-vias').checked;
+  var minZ0 = parseFloat(document.getElementById('min-z0').value) || 0;
+
+  // Outline layer helper (board outline not available in current API extraction)
+  var outlineLayers = {};
+  function isOutlineLayer(layer) { return outlineLayers[String(layer)] === true; }
+
+  // Draw board outline
+  var boardPts = pcbData.boardOutline;
+  if (boardPts && boardPts.length >= 3) {
+    ctx.beginPath();
+    var bp0 = worldToScreen(boardPts[0].x, boardPts[0].y);
+    ctx.moveTo(bp0.x, bp0.y);
+    for (var bpi = 1; bpi < boardPts.length; bpi++) {
+      var bpp = worldToScreen(boardPts[bpi].x, boardPts[bpi].y);
+      ctx.lineTo(bpp.x, bpp.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(20,30,50,0.5)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Build a lookup of z0 by trace id and layerName by layer id
+  var z0Map = {};
+  var layerNameMap = {};
+  if (analysisResults && analysisResults.results) {
+    analysisResults.results.forEach(function(r) {
+      z0Map[r.id] = r.z0;
+      if (!layerNameMap[r.layer]) layerNameMap[r.layer] = r.layerName;
+    });
+  }
+
+  // Store hover label info to draw last (foreground)
+  var hoverLabel = null;
+
+  // Selection highlight colors
+  var grayColor = 'rgba(255,255,255,0.04)';
+  var hlColorA = '#ff6b6b'; // red for net A
+  var hlColorB = '#4dabf7'; // blue for net B
+
+  // Helper: check if a trace matches selected crossing nets
+  function isSelectedNet(net) {
+    if (!selectedCrossing) return false;
+    return net === selectedCrossing.netA || net === selectedCrossing.netB;
+  }
+  function getSelectedColor(net) {
+    if (net === selectedCrossing.netA) return hlColorA;
+    return hlColorB;
+  }
+
+  // Draw traces
+  if (pcbData && pcbData.lines) {
+    // When a crossing is selected, draw in two passes: gray first, then highlighted on top
+    if (selectedCrossing) {
+      // Pass 1: gray (non-selected)
+      pcbData.lines.forEach(function(line) {
+        if (isOutlineLayer(line.layer)) return;
+        if (netFilter !== '__all__' && line.net !== netFilter) return;
+        if (isSelectedNet(line.net)) return; // skip selected — draw later
+        var p1 = worldToScreen(line.startX, line.startY);
+        var p2 = worldToScreen(line.endX, line.endY);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = grayColor;
+        ctx.lineWidth = Math.max(1, line.width * viewScale);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      });
+      // Pass 2: highlighted (selected nets on top)
+      pcbData.lines.forEach(function(line) {
+        if (isOutlineLayer(line.layer)) return;
+        if (netFilter !== '__all__' && line.net !== netFilter) return;
+        if (!isSelectedNet(line.net)) return;
+        var p1 = worldToScreen(line.startX, line.startY);
+        var p2 = worldToScreen(line.endX, line.endY);
+        var lw = Math.max(2, line.width * viewScale);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = getSelectedColor(line.net);
+        ctx.lineWidth = lw;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      });
+    } else {
+    pcbData.lines.forEach(function(line) {
+      if (isOutlineLayer(line.layer)) return;
+      if (netFilter !== '__all__' && line.net !== netFilter) return;
+
+      var isOtherLayer = (layerFilter !== '__all__' && String(line.layer) !== layerFilter);
+      if (isOtherLayer) {
+        var p1 = worldToScreen(line.startX, line.startY);
+        var p2 = worldToScreen(line.endX, line.endY);
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = grayColor;
+        ctx.lineWidth = Math.max(1, line.width * viewScale);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        return;
+      }
+
+      var z0 = z0Map[line.id];
+      if (minZ0 > 0 && (z0 === null || z0 === undefined || z0 < minZ0)) return;
+      var color = z0ToColor(z0, targetZ0, tolerancePct);
+      var p1 = worldToScreen(line.startX, line.startY);
+      var p2 = worldToScreen(line.endX, line.endY);
+      var lw = Math.max(1, line.width * viewScale);
+
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // If hovered, draw highlight
+      if (hoveredTrace && hoveredTrace.id === line.id) {
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = lw + 4;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        // Store label to draw last
+        var lName = layerNameMap[line.layer] || ('Layer ' + line.layer);
+        var wMm = Math.round(line.width * 1000) / 1000;
+        var label = (z0 !== null && z0 !== undefined) ? z0 + 'Ω' : 'N/A';
+        label += ' | ' + (line.net || 'no net') + ' | ' + lName + ' | ' + wMm + 'mm';
+        hoverLabel = { x: lastMouseX + 14, y: lastMouseY - 14, text: label };
+      }
+    });
+    } // end else
+  }
+
+  // Helper: trace arc path using arcSegments polyline
+  function traceArcPath(arc) {
+    ctx.beginPath();
+    if (arc.arcSegments && arc.arcSegments.length > 0) {
+      var p0 = worldToScreen(arc.arcSegments[0].x1, arc.arcSegments[0].y1);
+      ctx.moveTo(p0.x, p0.y);
+      for (var si = 0; si < arc.arcSegments.length; si++) {
+        var p = worldToScreen(arc.arcSegments[si].x2, arc.arcSegments[si].y2);
+        ctx.lineTo(p.x, p.y);
+      }
+    } else if (arc.centerX != null && arc.radius > 0) {
+      var pc = worldToScreen(arc.centerX, arc.centerY);
+      var r = arc.radius * viewScale;
+      var sa = (arc.startAngle || 0) * Math.PI / 180;
+      var ea = (arc.endAngle || 360) * Math.PI / 180;
+      ctx.arc(pc.x, pc.y, r, -sa, -ea, true);
+    }
+  }
+
+  // Draw arcs
+  if (pcbData && pcbData.arcs) {
+    if (selectedCrossing) {
+      // Pass 1: gray (non-selected)
+      pcbData.arcs.forEach(function(arc) {
+        if (isOutlineLayer(arc.layer)) return;
+        if (netFilter !== '__all__' && arc.net !== netFilter) return;
+        if (isSelectedNet(arc.net)) return;
+        traceArcPath(arc);
+        ctx.strokeStyle = grayColor;
+        ctx.lineWidth = Math.max(1, arc.width * viewScale);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      });
+      // Pass 2: highlighted (selected nets on top)
+      pcbData.arcs.forEach(function(arc) {
+        if (isOutlineLayer(arc.layer)) return;
+        if (netFilter !== '__all__' && arc.net !== netFilter) return;
+        if (!isSelectedNet(arc.net)) return;
+        traceArcPath(arc);
+        ctx.strokeStyle = getSelectedColor(arc.net);
+        ctx.lineWidth = Math.max(2, arc.width * viewScale);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+      });
+    } else {
+    pcbData.arcs.forEach(function(arc) {
+      if (isOutlineLayer(arc.layer)) return;
+      if (netFilter !== '__all__' && arc.net !== netFilter) return;
+
+      var isOtherLayer = (layerFilter !== '__all__' && String(arc.layer) !== layerFilter);
+      if (isOtherLayer) {
+        traceArcPath(arc);
+        ctx.strokeStyle = grayColor;
+        ctx.lineWidth = Math.max(1, arc.width * viewScale);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        return;
+      }
+
+      var z0 = z0Map[arc.id];
+      if (minZ0 > 0 && (z0 === null || z0 === undefined || z0 < minZ0)) return;
+      var color = z0ToColor(z0, targetZ0, tolerancePct);
+      var lw = Math.max(1, arc.width * viewScale);
+
+      traceArcPath(arc);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // If hovered, draw highlight
+      if (hoveredTrace && hoveredTrace.id === arc.id) {
+        traceArcPath(arc);
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = lw + 4;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        var lName = layerNameMap[arc.layer] || ('Layer ' + arc.layer);
+        var wMm = Math.round(arc.width * 1000) / 1000;
+        var label = (z0 !== null && z0 !== undefined) ? z0 + 'Ω' : 'N/A';
+        label += ' | ' + (arc.net || 'no net') + ' | ' + lName + ' | ' + wMm + 'mm';
+        hoverLabel = { x: lastMouseX + 14, y: lastMouseY - 14, text: label };
+      }
+    });
+    } // end else
+  }
+
+  // Draw vias
+  if (showVias && pcbData && pcbData.vias) {
+    pcbData.vias.forEach(function(v) {
+      var pv = worldToScreen(v.x, v.y);
+      var vr = Math.max(2, (v.holeRadius || 0.15) * viewScale);
+      ctx.beginPath();
+      ctx.arc(pv.x, pv.y, vr, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(156,39,176,0.7)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(156,39,176,1)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  // Draw crossing markers
+  if (showCrossings && crossings.length > 0) {
+    var filteredCrossings = getFilteredCrossings();
+    filteredCrossings.forEach(function(c) {
+      if (!c.point) return;
+
+      // When a crossing is selected, only show markers for that net pair and matching type
+      if (selectedCrossing) {
+        var cNetA = c.segA.net <= c.segB.net ? c.segA.net : c.segB.net;
+        var cNetB = c.segA.net <= c.segB.net ? c.segB.net : c.segA.net;
+        if (cNetA !== selectedCrossing.netA || cNetB !== selectedCrossing.netB) return;
+        // Filter by type: if group only has one type, only show that type
+        if (selectedCrossing.types && selectedCrossing.types.indexOf(',') === -1) {
+          if (c.crossType !== selectedCrossing.types) return;
+        }
+      }
+
+      var pp = worldToScreen(c.point.x, c.point.y);
+      var size = Math.max(6, 10 / Math.sqrt(viewScale));
+
+      if (c.crossType === 'crossing') {
+        // X marker for crossings
+        ctx.strokeStyle = '#F44336';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pp.x - size, pp.y - size);
+        ctx.lineTo(pp.x + size, pp.y + size);
+        ctx.moveTo(pp.x + size, pp.y - size);
+        ctx.lineTo(pp.x - size, pp.y + size);
+        ctx.stroke();
+        // Circle
+        ctx.beginPath();
+        ctx.arc(pp.x, pp.y, size + 2, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(244,67,54,0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        // Triangle for parallel runs
+        ctx.fillStyle = 'rgba(255,152,0,0.85)';
+        ctx.beginPath();
+        ctx.moveTo(pp.x, pp.y - size);
+        ctx.lineTo(pp.x - size * 0.8, pp.y + size * 0.6);
+        ctx.lineTo(pp.x + size * 0.8, pp.y + size * 0.6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#FF9800';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    });
+  }
+
+  // Draw board outline border on top
+  if (boardPts && boardPts.length >= 3) {
+    ctx.beginPath();
+    var bo0 = worldToScreen(boardPts[0].x, boardPts[0].y);
+    ctx.moveTo(bo0.x, bo0.y);
+    for (var boi = 1; boi < boardPts.length; boi++) {
+      var bop = worldToScreen(boardPts[boi].x, boardPts[boi].y);
+      ctx.lineTo(bop.x, bop.y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Draw hover label last (always on top)
+  if (hoverLabel) {
+    ctx.font = 'bold 13px sans-serif';
+    var metrics = ctx.measureText(hoverLabel.text);
+    var pad = 5;
+    var bx = hoverLabel.x - pad;
+    var by = hoverLabel.y - 14;
+    var bw = metrics.width + pad * 2;
+    var bh = 20;
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.beginPath();
+    ctx.roundRect(bx, by, bw, bh, 4);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(hoverLabel.text, hoverLabel.x, hoverLabel.y);
+  }
+}
+
+function drawGrid(w, h) {
+  var gridColor = 'rgba(255,255,255,0.04)';
+
+  // Compute grid spacing in world units that looks good at current zoom
+  var gridSpacing = 1; // 1mm
+  var screenSpacing = gridSpacing * viewScale;
+  while (screenSpacing < 20) { gridSpacing *= 5; screenSpacing = gridSpacing * viewScale; }
+  while (screenSpacing > 100) { gridSpacing /= 5; screenSpacing = gridSpacing * viewScale; }
+
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 0.5;
+
+  var startX = Math.floor(viewX / gridSpacing) * gridSpacing;
+  var startY = Math.floor(viewY / gridSpacing) * gridSpacing;
+  var endX = viewX + w / viewScale;
+  var endY = viewY + h / viewScale;
+
+  ctx.beginPath();
+  for (var gx = startX; gx <= endX; gx += gridSpacing) {
+    var sx = (gx - viewX) * viewScale;
+    ctx.moveTo(sx, 0);
+    ctx.lineTo(sx, h);
+  }
+  var ch = canvas.height / (window.devicePixelRatio || 1);
+  for (var gy = startY; gy <= endY; gy += gridSpacing) {
+    var sy = ch - (gy - viewY) * viewScale;
+    ctx.moveTo(0, sy);
+    ctx.lineTo(w, sy);
+  }
+  ctx.stroke();
+}
+
+// ═══════════════════════════════════════
+// UI Interaction — Pan/Zoom
+// ═══════════════════════════════════════
+function initCanvas() {
+  canvas = document.getElementById('pcb-canvas');
+  ctx = canvas.getContext('2d');
+  resizeCanvas();
+
+  canvas.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    var rect = canvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left;
+    var my = e.clientY - rect.top;
+
+    var worldBefore = screenToWorld(mx, my);
+
+    var factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    viewScale *= factor;
+    if (viewScale < 0.01) viewScale = 0.01;
+    if (viewScale > 500) viewScale = 500;
+
+    var worldAfter = screenToWorld(mx, my);
+    viewX -= (worldAfter.x - worldBefore.x);
+    viewY -= (worldAfter.y - worldBefore.y);
+
+    draw();
+  });
+
+  canvas.addEventListener('mousedown', function(e) {
+    if (e.button === 0) {
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      mouseDownX = e.clientX;
+      mouseDownY = e.clientY;
+      canvas.style.cursor = 'grabbing';
+    }
+  });
+
+  canvas.addEventListener('mousemove', function(e) {
+    if (isDragging) {
+      var dx = e.clientX - dragStartX;
+      var dy = e.clientY - dragStartY;
+      viewX -= dx / viewScale;
+      viewY += dy / viewScale;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      draw();
+    } else {
+      // Hover detection
+      var rect = canvas.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var my = e.clientY - rect.top;
+      var dpr = window.devicePixelRatio || 1;
+      lastMouseX = mx * dpr;
+      lastMouseY = my * dpr;
+      var worldPt = screenToWorld(mx, my);
+      detectHover(worldPt.x, worldPt.y);
+    }
+  });
+
+  canvas.addEventListener('mouseup', function(e) {
+    var wasDragging = isDragging;
+    isDragging = false;
+    canvas.style.cursor = 'crosshair';
+    // Treat as click (deselect) only if mouse barely moved from original mousedown
+    var dx = e.clientX - mouseDownX;
+    var dy = e.clientY - mouseDownY;
+    if (wasDragging && Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+      if (selectedCrossing) {
+        selectedCrossing = null;
+        // Remove selected class from list items
+        var items = document.querySelectorAll('.crossing-item.selected');
+        for (var i = 0; i < items.length; i++) items[i].classList.remove('selected');
+        draw();
+      }
+    }
+  });
+
+  canvas.addEventListener('mouseleave', function() {
+    isDragging = false;
+    canvas.style.cursor = 'crosshair';
+    if (hoveredTrace) {
+      hoveredTrace = null;
+      draw();
+    }
+  });
+
+  window.addEventListener('resize', function() {
+    resizeCanvas();
+    draw();
+  });
+}
+
+function resizeCanvas() {
+  var wrap = canvas.parentElement;
+  canvas.width = wrap.clientWidth * (window.devicePixelRatio || 1);
+  canvas.height = wrap.clientHeight * (window.devicePixelRatio || 1);
+  canvas.style.width = wrap.clientWidth + 'px';
+  canvas.style.height = wrap.clientHeight + 'px';
+  ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+}
+
+function detectHover(wx, wy) {
+  if (!pcbData) return;
+  var threshold = 0.5 / viewScale + 0.3;
+  var best = null;
+  var bestDist = threshold;
+
+  if (pcbData.lines) {
+    pcbData.lines.forEach(function(line) {
+      var dist = pointToSegDist(wx, wy, line.startX, line.startY, line.endX, line.endY);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = line;
+      }
+    });
+  }
+
+  if (pcbData.arcs) {
+    pcbData.arcs.forEach(function(arc) {
+      if (arc.arcSegments) {
+        for (var i = 0; i < arc.arcSegments.length; i++) {
+          var s = arc.arcSegments[i];
+          var dist = pointToSegDist(wx, wy, s.x1, s.y1, s.x2, s.y2);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = arc;
+          }
+        }
+      }
+    });
+  }
+
+  if (best !== hoveredTrace) {
+    hoveredTrace = best;
+    draw();
+  }
+}
+
+function pointToSegDist(px, py, x1, y1, x2, y2) {
+  var dx = x2 - x1, dy = y2 - y1;
+  var lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-10) return Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
+  var t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  var projX = x1 + t * dx, projY = y1 + t * dy;
+  return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+}
+
+function fitView() {
+  if (!pcbData) return;
+  var hasData = (pcbData.lines && pcbData.lines.length > 0) || (pcbData.arcs && pcbData.arcs.length > 0) || (pcbData.boardOutline && pcbData.boardOutline.length >= 3);
+  if (!hasData) return;
+
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+  if (pcbData.boardOutline) {
+    pcbData.boardOutline.forEach(function(p) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    });
+  }
+
+  if (pcbData.lines) {
+  pcbData.lines.forEach(function(l) {
+    if (l.startX < minX) minX = l.startX;
+    if (l.startY < minY) minY = l.startY;
+    if (l.endX < minX) minX = l.endX;
+    if (l.endY < minY) minY = l.endY;
+    if (l.startX > maxX) maxX = l.startX;
+    if (l.startY > maxY) maxY = l.startY;
+    if (l.endX > maxX) maxX = l.endX;
+    if (l.endY > maxY) maxY = l.endY;
+  });
+  }
+
+  if (pcbData.arcs) {
+    pcbData.arcs.forEach(function(a) {
+      if (a.arcSegments) {
+        a.arcSegments.forEach(function(s) {
+          if (s.x1 < minX) minX = s.x1;
+          if (s.y1 < minY) minY = s.y1;
+          if (s.x2 < minX) minX = s.x2;
+          if (s.y2 < minY) minY = s.y2;
+          if (s.x1 > maxX) maxX = s.x1;
+          if (s.y1 > maxY) maxY = s.y1;
+          if (s.x2 > maxX) maxX = s.x2;
+          if (s.y2 > maxY) maxY = s.y2;
+        });
+      } else {
+        var r = a.radius || 0;
+        if (a.centerX - r < minX) minX = a.centerX - r;
+        if (a.centerY - r < minY) minY = a.centerY - r;
+        if (a.centerX + r > maxX) maxX = a.centerX + r;
+        if (a.centerY + r > maxY) maxY = a.centerY + r;
+      }
+    });
+  }
+
+  var padding = 5; // mm
+  minX -= padding; minY -= padding;
+  maxX += padding; maxY += padding;
+
+  var cw = canvas.width / (window.devicePixelRatio || 1);
+  var ch = canvas.height / (window.devicePixelRatio || 1);
+
+  var scaleX = cw / (maxX - minX);
+  var scaleY = ch / (maxY - minY);
+  viewScale = Math.min(scaleX, scaleY);
+  viewX = minX - (cw / viewScale - (maxX - minX)) / 2;
+  viewY = minY - (ch / viewScale - (maxY - minY)) / 2;
+
+  draw();
+}
+
+// ═══════════════════════════════════════
+// Stats panel
+// ═══════════════════════════════════════
+function updateStats() {
+  if (!analysisResults || !analysisResults.results) {
+    document.getElementById('stats-content').textContent = 'No data';
+    return;
+  }
+
+  var results = analysisResults.results;
+  var total = results.length;
+  var low = targetZ0 * (1 - tolerancePct / 100);
+  var high = targetZ0 * (1 + tolerancePct / 100);
+
+  var inTol = 0, outTol = 0, noZ0 = 0;
+  results.forEach(function(r) {
+    if (r.z0 === null || isNaN(r.z0)) { noZ0++; return; }
+    if (r.z0 >= low && r.z0 <= high) inTol++;
+    else outTol++;
+  });
+
+  var html =
+    '<div class="info-row"><span class="lbl">Total segments:</span><span>' + total + '</span></div>' +
+    '<div class="info-row"><span class="lbl">Target Z₀:</span><span>' + targetZ0 + 'Ω ±' + tolerancePct + '%</span></div>' +
+    '<div class="info-row"><span class="lbl">Range:</span><span>' + low.toFixed(1) + '–' + high.toFixed(1) + 'Ω</span></div>' +
+    '<div class="info-row"><span class="lbl" style="color:var(--green)">✓ Within:</span><span style="color:var(--green);font-weight:700">' + inTol + '</span></div>' +
+    '<div class="info-row"><span class="lbl" style="color:var(--red)">✗ Outside:</span><span style="color:var(--red);font-weight:700">' + outTol + '</span></div>';
+  if (noZ0 > 0) {
+    html += '<div class="info-row"><span class="lbl" style="color:var(--fg2)">— No Z₀:</span><span>' + noZ0 + '</span></div>';
+  }
+
+  document.getElementById('stats-content').innerHTML = html;
+
+  // Crossings — group by net pair
+  var filteredCrossings = getFilteredCrossings();
+  var cHtml = '';
+  if (filteredCrossings.length > 0) {
+    // Group by net pair only (ignore layers)
+    var crossGroups = {};
+    for (var ci = 0; ci < filteredCrossings.length; ci++) {
+      var c = filteredCrossings[ci];
+      var nA = c.segA.net, nB = c.segB.net;
+      // Normalize order so A<B
+      var gNetA = nA <= nB ? nA : nB;
+      var gNetB = nA <= nB ? nB : nA;
+      var gKey = gNetA + '|' + gNetB;
+      if (!crossGroups[gKey]) {
+        crossGroups[gKey] = { netA: gNetA, netB: gNetB, layers: {}, count: 0, types: {}, totalOverlap: 0 };
+      }
+      crossGroups[gKey].count++;
+      crossGroups[gKey].types[c.crossType] = (crossGroups[gKey].types[c.crossType] || 0) + 1;
+      crossGroups[gKey].totalOverlap += c.overlapLength || 0;
+      crossGroups[gKey].layers[c.segA.layer] = true;
+      crossGroups[gKey].layers[c.segB.layer] = true;
+    }
+    var gKeys = Object.keys(crossGroups);
+    cHtml = '<h4 style="margin-top:10px;color:var(--orange);">⚠ Cross-Layer (' + gKeys.length + ' groups, ' + filteredCrossings.length + ' total)</h4>';
+    cHtml += '<div class="crossing-list">';
+    var maxShow = Math.min(gKeys.length, 80);
+    for (var gi = 0; gi < maxShow; gi++) {
+      var gk = gKeys[gi];
+      var grp = crossGroups[gk];
+      var hasCross = grp.types['crossing'] > 0;
+      var hasPar = grp.types['parallel'] > 0;
+      var cls = hasCross ? 'crossing-item' : 'crossing-item parallel';
+      var icons = [];
+      if (hasCross) icons.push('✕' + (grp.types['crossing'] > 1 ? '×' + grp.types['crossing'] : ''));
+      if (hasPar) icons.push('≈' + (grp.types['parallel'] > 1 ? '×' + grp.types['parallel'] : ''));
+      var overlapStr = grp.totalOverlap > 0 ? ' — ' + (Math.round(grp.totalOverlap * 100) / 100) + 'mm' : '';
+      var layerList = Object.keys(grp.layers).sort(function(a,b){return a-b;}).join(',');
+      var typesStr = (hasCross ? 'crossing' : '') + (hasCross && hasPar ? ',' : '') + (hasPar ? 'parallel' : '');
+      cHtml += '<div class="' + cls + '" data-neta="' + esc(grp.netA) + '" data-netb="' + esc(grp.netB) + '" data-types="' + typesStr + '">' +
+        icons.join(' ') + ' <strong>' + esc(grp.netA) + '</strong> × <strong>' + esc(grp.netB) + '</strong>' +
+        ' <span style="color:var(--fg2);">(L' + layerList + ')</span>' +
+        overlapStr + '</div>';
+    }
+    if (gKeys.length > maxShow) {
+      cHtml += '<div style="font-size:10px;color:var(--fg2);margin-top:4px;">... and ' + (gKeys.length - maxShow) + ' more groups</div>';
+    }
+    cHtml += '</div>';
+  } else {
+    cHtml = '<h4 style="margin-top:10px;color:var(--green);">✓ No cross-layer interferences</h4>';
+  }
+  document.getElementById('crossings-content').innerHTML = cHtml;
+
+  // Attach click handlers to crossing items
+  var cItems = document.querySelectorAll('.crossing-item');
+  for (var cii = 0; cii < cItems.length; cii++) {
+    cItems[cii].addEventListener('click', function(e) {
+      var el = e.currentTarget;
+      var nA = el.getAttribute('data-neta');
+      var nB = el.getAttribute('data-netb');
+      var types = el.getAttribute('data-types') || '';
+      // Toggle selection
+      if (selectedCrossing && selectedCrossing.netA === nA && selectedCrossing.netB === nB) {
+        selectedCrossing = null;
+        el.classList.remove('selected');
+      } else {
+        selectedCrossing = { netA: nA, netB: nB, types: types };
+        document.querySelectorAll('.crossing-item.selected').forEach(function(s) { s.classList.remove('selected'); });
+        el.classList.add('selected');
+      }
+      draw();
+    });
+  }
+
+  // Update legend labels
+  document.getElementById('legend-min').textContent = low.toFixed(0) + 'Ω';
+  document.getElementById('legend-target').textContent = targetZ0 + 'Ω';
+  document.getElementById('legend-max').textContent = high.toFixed(0) + 'Ω';
+
+  // Gradient bar
+  var barEl = document.getElementById('legend-bar');
+  barEl.style.background = 'linear-gradient(to right, #1e88e5, #4CAF50 35%, #4CAF50 65%, #F44336)';
+}
+
+function populateVizFilters() {
+  if (!analysisResults || !analysisResults.results) return;
+
+  var nets = {};
+  var layers = {};
+  analysisResults.results.forEach(function(r) {
+    nets[r.net] = true;
+    layers[r.layer] = r.layerName;
+  });
+
+  var netSel = document.getElementById('viz-net-filter');
+  netSel.innerHTML = '<option value="__all__">All nets (' + Object.keys(nets).length + ')</option>';
+  Object.keys(nets).sort().forEach(function(n) {
+    var opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = n;
+    netSel.appendChild(opt);
+  });
+
+  var laySel = document.getElementById('viz-layer-filter');
+  laySel.innerHTML = '<option value="__all__">All layers</option>';
+  // Use physical stackup order (not string sort which puts Bottom between Inner5 and Inner6)
+  var layerKeys = stackup && stackup.layerOrder ? stackup.layerOrder.map(String).filter(function(k) { return layers[k]; }) : Object.keys(layers).sort(function(a, b) { return Number(a) - Number(b); });
+  // Add any layers found in results but not in stackup order
+  Object.keys(layers).forEach(function(k) { if (layerKeys.indexOf(k) === -1) layerKeys.push(k); });
+  layerKeys.forEach(function(l) {
+    var opt = document.createElement('option');
+    opt.value = l;
+    opt.textContent = layers[l];
+    laySel.appendChild(opt);
+  });
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ═══════════════════════════════════════
+// Data loading
+// ═══════════════════════════════════════
+async function loadData() {
+  try {
+    // Check for selected traces data (written by "View Selected" button)
+    var selectedData = null;
+    try {
+      selectedData = await eda.sys_Storage.getExtensionUserConfig('impedance-calc-selected');
+    } catch(e) {}
+    if (selectedData && (selectedData.lines || selectedData.arcs)) {
+      pcbData = selectedData;
+      // Clear selected data so next normal open uses full data
+      try { await eda.sys_Storage.deleteExtensionUserConfig('impedance-calc-selected'); } catch(e) {}
+    } else {
+      pcbData = await eda.sys_Storage.getExtensionUserConfig(STORAGE_KEY);
+    }
+    if (!pcbData || (!pcbData.lines && !pcbData.arcs)) {
+      document.getElementById('stats-content').textContent = 'No PCB data found. Run the calculator first.';
+      var ov = document.getElementById('loading-overlay');
+      if (ov) { ov.classList.add('hidden'); setTimeout(function(){ ov.style.display='none'; }, 350); }
+      return;
+    }
+
+    // Load stackup preset
+    var savedStackup = await eda.sys_Storage.getExtensionUserConfig(STACKUP_STORAGE_KEY);
+    var presetKey = (savedStackup && savedStackup.preset) ? savedStackup.preset : '4L-1.6mm-jlcpcb-7628';
+    var preset = ImpedanceCalc.STACKUP_PRESETS[presetKey];
+    var presetGaps = (preset && preset.gaps) ? preset.gaps : null;
+    var presetEr = (preset && preset.er) ? preset.er : 4.6;
+    var boardThickness = (preset && preset.boardThickness) ? preset.boardThickness : 1.6;
+    var outerCuT = (preset && preset.copperThickness) ? preset.copperThickness : 0.035;
+    var innerCuT = (preset && preset.innerCopperThickness) ? preset.innerCopperThickness : 0.0152;
+
+    stackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT);
+    analysisResults = ImpedanceCalc.analyzeAll(pcbData, stackup);
+
+    // Detect crossings (pass stackup so shielded crossings are excluded)
+    crossings = ImpedanceCalc.detectCrossings(pcbData, stackup);
+
+    populateVizFilters();
+    updateStats();
+    fitView();
+  } catch(e) {
+    document.getElementById('stats-content').textContent = 'Error: ' + (e.message || e);
+  }
+  // Hide loading overlay
+  var ov = document.getElementById('loading-overlay');
+  if (ov) { ov.classList.add('hidden'); setTimeout(function(){ ov.style.display='none'; }, 350); }
+}
+
+// ═══════════════════════════════════════
+// Event handlers
+// ═══════════════════════════════════════
+document.getElementById('target-z0').addEventListener('change', function() {
+  targetZ0 = parseFloat(this.value) || 50;
+  tolerancePct = parseFloat(document.getElementById('tolerance').value) || 10;
+  updateStats();
+  draw();
+});
+
+document.getElementById('tolerance').addEventListener('change', function() {
+  tolerancePct = parseFloat(this.value) || 10;
+  targetZ0 = parseFloat(document.getElementById('target-z0').value) || 50;
+  updateStats();
+  draw();
+});
+
+document.getElementById('viz-net-filter').addEventListener('change', function() { updateStats(); draw(); });
+document.getElementById('viz-layer-filter').addEventListener('change', function() { updateStats(); draw(); });
+document.getElementById('chk-vias').addEventListener('change', function() { draw(); });
+document.getElementById('min-z0').addEventListener('change', function() { draw(); });
+document.getElementById('chk-warn-crossings').addEventListener('change', function() { updateStats(); draw(); });
+document.getElementById('chk-warn-parallel').addEventListener('change', function() { updateStats(); draw(); });
+
+document.getElementById('btn-fit').addEventListener('click', fitView);
+
+// ═══════════════════════════════════════
+// Init
+// ═══════════════════════════════════════
+window.addEventListener('load', function() {
+  initCanvas();
+  loadData();
+});
+</script>
+</body>
+</html>

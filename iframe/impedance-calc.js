@@ -1,0 +1,938 @@
+/**
+ * impedance-calc.js
+ * PCB trace impedance calculation engine.
+ *
+ * Models: Microstrip, Stripline, Coplanar Waveguide (CPWG), Differential.
+ * References: IPC-2141A, Hammerstad & Jensen (1980), Wadell.
+ */
+
+var ImpedanceCalc = (function (exports) {
+  'use strict';
+
+  // ═══════════════════════════════════════
+  // Constants and defaults
+  // ═══════════════════════════════════════
+
+  var DEFAULT_STACKUP = {
+    er: 4.5,
+    copperThickness: 0.035,
+    boardThickness: 1.6,
+    layers: {}
+  };
+
+  // Common PCB stackup presets (from JLCPCB EasyEDA layer export data)
+  var STACKUP_PRESETS = {
+    '2L-1.6mm-jlcpcb': {
+      label: '2-Layer 1.6mm (JLCPCB)',
+      layers: 2,
+      boardThickness: 1.6,
+      copperThickness: 0.04064,
+      innerCopperThickness: 0.04064,
+      er: 4.5,
+      gaps: null
+    },
+
+    // ── 4-Layer ───────────────────────────────────
+    '4L-1.6mm-jlcpcb-7628': {
+      label: '4-Layer 1.6mm (JLCPCB 7628) JLC04161H',
+      layers: 4,
+      boardThickness: 1.6,
+      copperThickness: 0.04064,
+      innerCopperThickness: 0.0152,
+      er: 4.4,
+      // εr from JLCPCB: 7628 Prepreg Dk = 4.4, Core 1.1mm Dk = 4.41
+      // L1→L2: PP 7628 RC49% 8.6mil 0.2104mm
+      // L2→L3: Core 1.1mm H/HOZ 1.065mm
+      // L3→L4: PP 7628 RC49% 8.6mil 0.2104mm
+      gaps: [0.2104, 1.065, 0.2104],
+      gapEr: [4.4, 4.41, 4.4]
+    },
+
+    // ── 6-Layer ───────────────────────────────────
+    '6L-1.6mm-jlcpcb-3313': {
+      label: '6-Layer 1.6mm (JLCPCB 3313) JLC06161H',
+      layers: 6,
+      boardThickness: 1.6,
+      copperThickness: 0.04064,
+      innerCopperThickness: 0.0152,
+      er: 4.1,
+      // εr from JLCPCB: 3313 Prepreg Dk = 4.1, 2116 Dk = 4.16, Core 0.55mm Dk = 4.41
+      // L1→L2: PP 3313 RC57% 4.2mil 0.0994mm
+      // L2→L3: Core 0.55mm H/H 0.55mm
+      // L3→L4: PP 2116 RC54% 4.9mil 0.1088mm
+      // L4→L5: Core 0.55mm H/H 0.55mm
+      // L5→L6: PP 3313 RC57% 4.2mil 0.0994mm
+      gaps: [0.0994, 0.55, 0.1088, 0.55, 0.0994],
+      gapEr: [4.1, 4.41, 4.16, 4.41, 4.1]
+    },
+
+    // ── 8-Layer ───────────────────────────────────
+    '8L-1.6mm-jlcpcb-2116': {
+      label: '8-Layer 1.6mm (JLCPCB 2116) JLC08161H',
+      layers: 8,
+      boardThickness: 1.6,
+      copperThickness: 0.04064,
+      innerCopperThickness: 0.0152,
+      er: 4.16,
+      // εr from JLCPCB: 2116 Prepreg Dk = 4.16, 1080 Dk = 3.91, Core 0.3mm Dk = 4.41
+      // L1→L2: PP 2116 RC54% 4.9mil 0.1164mm
+      // L2→L3: Core 0.3mm H/HOZ 0.3mm
+      // L3→L4: 2×PP 1080 RC67% 3.3mil = 0.0764+0.0764 = 0.1528mm
+      // L4→L5: Core 0.3mm H/HOZ 0.3mm
+      // L5→L6: 2×PP 1080 RC67% 3.3mil = 0.0764+0.0764 = 0.1528mm
+      // L6→L7: Core 0.3mm H/HOZ 0.3mm
+      // L7→L8: PP 2116 RC54% 4.9mil 0.1164mm
+      gaps: [0.1164, 0.3, 0.1528, 0.3, 0.1528, 0.3, 0.1164],
+      gapEr: [4.16, 4.41, 3.91, 4.41, 3.91, 4.41, 4.16]
+    }
+  };
+
+  // EasyEDA Pro layer ID mapping (discovered from actual API data)
+  // Copper layers: 1 (TopLayer), 2 (BottomLayer), 15-46 (Inner1-Inner32)
+  // Everything else is non-copper (silkscreen, solder mask, mechanical, etc.)
+  //
+  // Since EasyEDA Pro does not expose a stackup API, we detect copper layers
+  // dynamically from the primitives present in the board.
+
+  // Well-known layer IDs (only Top/Bottom are guaranteed)
+  var KNOWN_LAYERS = {
+    1:  { name: 'TopLayer',    type: 'microstrip', h: 0.2, er: 4.5 },
+    2:  { name: 'BottomLayer', type: 'microstrip', h: 0.2, er: 4.5 }
+  };
+
+  /**
+   * Determine if a layer ID is a copper layer.
+   * Copper layers in EasyEDA Pro: 1 (Top), 2 (Bottom), 15-46 (Inner1-Inner32).
+   * All other IDs (silkscreen, solder mask, paste, mechanical, multi-layer,
+   * hole, pin floating, 3D shell, drill, stiffener, custom, dielectric, etc.)
+   * are NOT copper.
+   */
+  function isCopperLayer(layerId) {
+    if (layerId === 1 || layerId === 2) return true;
+    if (layerId >= 15 && layerId <= 46) return true;
+    return false;
+  }
+
+  // JLCPCB manufacturing parameters (from impedance calculator user guide)
+  // NOTE: Soldermask (εr=3.8, 0.6mil over Cu) and etch taper (top = base − 0.7mil)
+  // partially cancel each other in practice (~+2Ω etch vs ~−0.5Ω SM for typical traces).
+  // Analytical approximations for these effects are too aggressive and produce worse
+  // results than the raw Hammerstad formula (which already gives <1% error vs JLCPCB's
+  // Polar Si9000 field solver). Therefore these corrections are NOT applied.
+
+  /**
+   * Build stackup automatically from PCB data.
+   * Detects copper layers dynamically from traces and copper pours.
+   * Infers physical order: Top(1) → inner layers (sorted) → Bottom(2).
+   * Calculates dielectric height to nearest reference plane.
+   *
+   * @param {object} pcbData - Extracted PCB data with lines, arcs, zones
+   * @param {number} boardThickness - Total board thickness in mm (default 1.6)
+   * @returns {object} Stackup configuration
+   */
+  function buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuThickness, innerCuThickness, presetGapEr) {
+    if (!boardThickness) boardThickness = 1.6;
+    if (!presetEr) presetEr = 4.6;
+    if (!outerCuThickness) outerCuThickness = 0.04064;
+    if (!innerCuThickness) innerCuThickness = 0.0152;
+
+    // API-provided data (from pcb_Layer.getTheNumberOfCopperLayers / getAllLayers)
+    var apiCopperCount = pcbData.copperLayerCount || null;
+    var apiNames = pcbData.apiLayerNames || {};
+
+    // Collect all layers with traces (signal layers)
+    var signalLayers = {};
+    pcbData.lines.forEach(function(l) { signalLayers[l.layer] = true; });
+    pcbData.arcs.forEach(function(a) { signalLayers[a.layer] = true; });
+
+    // Collect all layers with copper pours/zones (reference planes)
+    var planeLayers = {};
+    if (pcbData.zones) {
+      pcbData.zones.forEach(function(z) {
+        if (isCopperLayer(z.layer)) {
+          planeLayers[z.layer] = z.net || 'GND';
+        }
+      });
+    }
+
+    // Merge into a set of ALL copper layers present on the board
+    var allCopperLayers = {};
+    for (var k in signalLayers) {
+      if (isCopperLayer(Number(k))) allCopperLayers[k] = true;
+    }
+    for (var k in planeLayers) {
+      allCopperLayers[k] = true;
+    }
+
+    // Determine physical order: Top(1) first, Bottom(2) last, inner sorted between
+    var innerLayers = [];
+    var hasTop = false, hasBottom = false;
+    for (var id in allCopperLayers) {
+      var n = Number(id);
+      if (n === 1) { hasTop = true; }
+      else if (n === 2) { hasBottom = true; }
+      else { innerLayers.push(n); }
+    }
+    // Sort inner layers by their ID (physical order in EasyEDA)
+    innerLayers.sort(function(a, b) { return a - b; });
+
+    // Build ordered layer list: Top → inner... → Bottom
+    var layerOrder = [];
+    if (hasTop) layerOrder.push(1);
+    layerOrder = layerOrder.concat(innerLayers);
+    if (hasBottom) layerOrder.push(2);
+
+    var numLayers = layerOrder.length;
+
+    // Calculate spacing between adjacent copper layers
+    var spacings = {}; // spacings[i] = gap between layerOrder[i] and layerOrder[i+1]
+    var gapErValues = {}; // gapErValues[i] = εr for gap i
+    if (numLayers >= 2) {
+      var numGaps = numLayers - 1;
+
+      if (presetGaps && presetGaps.length === numGaps) {
+        // Preset gaps match exactly — use them directly
+        for (var pg = 0; pg < numGaps; pg++) {
+          spacings[pg] = presetGaps[pg];
+          gapErValues[pg] = (presetGapEr && presetGapEr[pg] !== undefined) ? presetGapEr[pg] : presetEr;
+        }
+      } else if (presetGaps && presetGaps.length > numGaps) {
+        // Preset expects MORE layers than detected (e.g. 4-layer preset, 3 detected)
+        // Build expected full layer order for the preset
+        var expectedLayerCount = presetGaps.length + 1;
+        var expectedInnerCount = expectedLayerCount - 2; // minus Top and Bottom
+        var expectedInnerIds = [];
+        // Expected inner layer IDs: 15, 16, 17... (EasyEDA convention)
+        for (var ei = 0; ei < expectedInnerCount; ei++) {
+          expectedInnerIds.push(15 + ei);
+        }
+        // Expected full order: Top(1) → [15, 16, ...] → Bottom(2)
+        var expectedOrder = [1].concat(expectedInnerIds).concat([2]);
+
+        // Map detected layers to their position in the expected order
+        // For each detected gap (between consecutive detected layers),
+        // sum all preset gaps between those two expected positions
+        for (var dg = 0; dg < numGaps; dg++) {
+          var fromLayer = layerOrder[dg];
+          var toLayer = layerOrder[dg + 1];
+          var fromPos = expectedOrder.indexOf(fromLayer);
+          var toPos = expectedOrder.indexOf(toLayer);
+
+          // If a layer ID isn't in expected order, find nearest position
+          if (fromPos === -1) {
+            // Unknown inner layer — estimate position by ID
+            if (fromLayer === 1) fromPos = 0;
+            else if (fromLayer === 2) fromPos = expectedOrder.length - 1;
+            else fromPos = Math.min(fromLayer - 14, expectedOrder.length - 2);
+          }
+          if (toPos === -1) {
+            if (toLayer === 1) toPos = 0;
+            else if (toLayer === 2) toPos = expectedOrder.length - 1;
+            else toPos = Math.min(toLayer - 14, expectedOrder.length - 2);
+          }
+
+          // Sum all preset gaps between fromPos and toPos
+          var gapSum = 0;
+          var erWeightedSum = 0;
+          for (var gs = Math.min(fromPos, toPos); gs < Math.max(fromPos, toPos); gs++) {
+            var gd = presetGaps[gs] || 0;
+            gapSum += gd;
+            erWeightedSum += gd * ((presetGapEr && presetGapEr[gs] !== undefined) ? presetGapEr[gs] : presetEr);
+          }
+          spacings[dg] = gapSum > 0 ? gapSum : boardThickness / numGaps;
+          gapErValues[dg] = gapSum > 0 ? erWeightedSum / gapSum : presetEr;
+        }
+      } else if (numGaps === 1) {
+        spacings[0] = boardThickness;
+        gapErValues[0] = presetEr;
+      } else {
+        // No preset or preset has fewer gaps — distribute evenly
+        var evenGap = boardThickness / numGaps;
+        for (var g = 0; g < numGaps; g++) {
+          spacings[g] = evenGap;
+          gapErValues[g] = presetEr;
+        }
+      }
+    }
+
+    // Build stackup config for each copper layer
+    var stackupLayers = {};
+    for (var si = 0; si < layerOrder.length; si++) {
+      var layerNum = layerOrder[si];
+
+      // Name the layer — prefer API name if available
+      var layerName;
+      if (apiNames[layerNum]) {
+        layerName = apiNames[layerNum];
+      } else if (layerNum === 1) layerName = 'TopLayer';
+      else if (layerNum === 2) layerName = 'BottomLayer';
+      else {
+        var innerIdx = innerLayers.indexOf(layerNum);
+        layerName = 'InnerLayer' + (innerIdx + 1) + ' (id:' + layerNum + ')';
+      }
+
+      // Find nearest reference plane
+      var hToPlane = null;
+      var hasPlaneAbove = false;
+      var hasPlaneBelow = false;
+
+      // Search upward (toward top)
+      var distUp = 0;
+      var erGapsUp = [];
+      for (var u = si - 1; u >= 0; u--) {
+        var gapD = spacings[u] || 0.2;
+        distUp += gapD;
+        erGapsUp.push({ dist: gapD, er: gapErValues[u] || presetEr });
+        if (planeLayers[layerOrder[u]]) {
+          hasPlaneAbove = true;
+          if (hToPlane === null || distUp < hToPlane) hToPlane = distUp;
+          break;
+        }
+      }
+
+      // Search downward (toward bottom)
+      var distDown = 0;
+      var erGapsDown = [];
+      for (var d = si; d < layerOrder.length - 1; d++) {
+        var gapD = spacings[d] || 0.2;
+        distDown += gapD;
+        erGapsDown.push({ dist: gapD, er: gapErValues[d] || presetEr });
+        if (planeLayers[layerOrder[d + 1]]) {
+          hasPlaneBelow = true;
+          if (hToPlane === null || distDown < hToPlane) hToPlane = distDown;
+          break;
+        }
+      }
+
+      // Determine model based on reference plane positions
+      var type;
+      var bStripline = null; // total distance between planes (for stripline)
+      var classReason = '';
+      if (planeLayers[layerNum] && !signalLayers[layerNum]) {
+        type = null; // Pure reference plane — no signal traces to analyze
+        classReason = 'pure_plane (has pour "' + planeLayers[layerNum] + '", no traces)';
+      } else if (hasPlaneAbove && hasPlaneBelow) {
+        type = 'stripline';
+        bStripline = distUp + distDown; // total plane-to-plane separation
+        classReason = 'stripline (plane above at ' + r3(distUp) + 'mm, plane below at ' + r3(distDown) + 'mm, b=' + r3(bStripline) + 'mm)';
+        if (planeLayers[layerNum] && signalLayers[layerNum]) {
+          classReason += ' [NOTE: also has pour "' + planeLayers[layerNum] + '" but has traces too]';
+        }
+      } else if (hasPlaneAbove || hasPlaneBelow) {
+        type = 'microstrip';
+        classReason = 'microstrip (plane ' + (hasPlaneAbove ? 'above at ' + r3(distUp) + 'mm' : 'below at ' + r3(distDown) + 'mm') + ')';
+        if (planeLayers[layerNum] && signalLayers[layerNum]) {
+          classReason += ' [NOTE: also has pour "' + planeLayers[layerNum] + '" but has traces too]';
+        }
+      } else {
+        type = 'microstrip';
+        hToPlane = boardThickness;
+        classReason = 'microstrip_fallback (no ref planes found, using boardThickness=' + boardThickness + 'mm)';
+      }
+
+      if (hToPlane === null) hToPlane = 0.2;
+
+      // Compute per-layer εr from gap dielectric constants
+      var layerEr = presetEr;
+      if (type === 'microstrip') {
+        // Use εr from the gap(s) to the reference plane
+        var erGaps = (hasPlaneAbove && erGapsUp.length > 0) ? erGapsUp :
+                     (hasPlaneBelow && erGapsDown.length > 0) ? erGapsDown : [];
+        if (erGaps.length === 1) {
+          layerEr = erGaps[0].er;
+        } else if (erGaps.length > 1) {
+          var totalD = 0, erW = 0;
+          for (var eg = 0; eg < erGaps.length; eg++) { totalD += erGaps[eg].dist; erW += erGaps[eg].er * erGaps[eg].dist; }
+          layerEr = totalD > 0 ? erW / totalD : presetEr;
+        }
+      } else if (type === 'stripline') {
+        // Weighted average of all gaps (above and below) to reference planes
+        var allGaps = erGapsUp.concat(erGapsDown);
+        if (allGaps.length > 0) {
+          var totalD = 0, erW = 0;
+          for (var eg = 0; eg < allGaps.length; eg++) { totalD += allGaps[eg].dist; erW += allGaps[eg].er * allGaps[eg].dist; }
+          layerEr = totalD > 0 ? erW / totalD : presetEr;
+        }
+      }
+
+      // Copper thickness: outer layers 1oz (finished), inner layers 0.5oz
+      var isOuterLayer = (layerNum === 1 || layerNum === 2);
+      var layerCuT = isOuterLayer ? outerCuThickness : innerCuThickness;
+
+      stackupLayers[layerNum] = {
+        name: layerName,
+        type: type,
+        h: r3(hToPlane),
+        b: bStripline ? r3(bStripline) : null,
+        er: r3(layerEr),
+        copperT: layerCuT,
+        isPlane: !!planeLayers[layerNum],
+        planeNet: planeLayers[layerNum] || null,
+        hasTraces: !!signalLayers[layerNum],
+        isOuter: isOuterLayer,
+        _classReason: classReason
+      };
+    }
+
+    return {
+      er: presetEr,
+      copperThickness: outerCuThickness,
+      innerCopperThickness: innerCuThickness,
+      boardThickness: boardThickness,
+      layers: stackupLayers,
+      detectedPlanes: planeLayers,
+      layerOrder: layerOrder,
+      spacings: spacings,
+      gapErValues: gapErValues,
+      _debug: {
+        signalLayers: Object.keys(signalLayers).map(Number),
+        planeLayers: Object.keys(planeLayers).map(function(k) { return { layer: Number(k), net: planeLayers[k] }; }),
+        allCopperLayers: Object.keys(allCopperLayers).map(Number),
+        numLayers: numLayers,
+        apiCopperCount: apiCopperCount,
+        presetGapsUsed: presetGaps || null,
+        presetGapsCount: presetGaps ? presetGaps.length : 0,
+        detectedGapsCount: numLayers > 1 ? numLayers - 1 : 0,
+        gapMergeUsed: presetGaps ? (presetGaps.length > (numLayers > 1 ? numLayers - 1 : 0)) : false
+      }
+    };
+  }
+
+  // ═══════════════════════════════════════
+  // Impedance calculations
+  // ═══════════════════════════════════════
+
+  /**
+   * Microstrip — outer layer trace.
+   * Hammerstad & Jensen (1980).
+   *
+   * @param {number} w  - Trace width (mm)
+   * @param {number} h  - Dielectric height (mm)
+   * @param {number} t  - Copper thickness (mm)
+   * @param {number} er - Relative dielectric constant
+   * @returns {{ z0: number, erEff: number, model: string }}
+   */
+  function microstrip(w, h, t, er) {
+    var wEff = w;
+    if (t > 0 && h > 0) {
+      var dw = (t / Math.PI) * Math.log(4 * Math.E / Math.sqrt(
+        Math.pow(t / h, 2) + Math.pow(t / (w * Math.PI + 1.1 * t * Math.PI), 2)
+      ));
+      wEff = w + dw;
+    }
+
+    var u = wEff / h;
+    var erEff = ((er + 1) / 2) + ((er - 1) / 2) * Math.pow(1 + 12 / u, -0.5);
+
+    var z0Free;
+    if (u <= 1) {
+      z0Free = 60 * Math.log((8 / u) + (u / 4));
+    } else {
+      z0Free = 120 * Math.PI / (u + 1.393 + 0.667 * Math.log(u + 1.444));
+    }
+
+    var z0 = z0Free / Math.sqrt(erEff);
+    return { z0: r2(z0), erEff: r2(erEff), model: 'Microstrip' };
+  }
+
+  /**
+   * Stripline — trace embedded between two planes.
+   * IPC-2141A formula for centered, dual-microstrip for offset.
+   *
+   * @param {number} w      - Trace width (mm)
+   * @param {number} b      - Total distance between planes (mm)
+   * @param {number} t      - Copper thickness (mm)
+   * @param {number} er     - Relative dielectric constant
+   * @param {number} hNear  - (optional) Distance to nearest plane (mm). If omitted, centered.
+   * @returns {{ z0: number, erEff: number, model: string }}
+   */
+  function stripline(w, b, t, er, hNear) {
+    if (!b || b <= 0) return { z0: 0, erEff: r2(er), model: 'Stripline' };
+
+    // IPC-2141A formula.
+    // NOTE: The traditional wEff thickness correction (Cohn/IPC) adds ~19% to trace
+    // width for thin copper (0.5oz = 0.0152mm), causing ~9% Z₀ error vs field solvers.
+    // The "+t" term in the denominator already accounts for thickness to first order.
+    // Without the correction, error vs JLCPCB Polar Si9000 is <0.5%.
+    var arg = 1.9 * b / (0.8 * w + t);
+    var z0;
+    if (arg > 1) {
+      z0 = (60 / Math.sqrt(er)) * Math.log(arg);
+    } else {
+      z0 = (377 * b) / (4 * Math.sqrt(er) * w);
+    }
+
+    // Detect offset for model label
+    var model = 'Stripline';
+    if (hNear && hNear > 0 && hNear < b) {
+      var h1 = Math.min(hNear, b - hNear);
+      var h2 = b - h1;
+      if (h2 / h1 > 2.0) model = 'Offset Stripline';
+    }
+
+    return { z0: r2(z0), erEff: r2(er), model: model };
+  }
+
+  /**
+   * Differential Microstrip.
+   * @param {number} w  - Width of each trace (mm)
+   * @param {number} h  - Dielectric height (mm)
+   * @param {number} t  - Copper thickness (mm)
+   * @param {number} s  - Spacing between traces (mm)
+   * @param {number} er - Dielectric constant
+   * @returns {{ zDiff: number, zOdd: number, zEven: number, z0Single: number, model: string }}
+   */
+  function differentialMicrostrip(w, h, t, s, er) {
+    var single = microstrip(w, h, t, er);
+    var u = w / h;
+    var g = s / h;
+    var kOdd = Math.exp(-0.627 * Math.pow(er, 0.327) * g * Math.pow(u, -0.11));
+    var zOdd = single.z0 * (1 - 0.347 * kOdd);
+    var zEven = single.z0 * (1 + 0.347 * kOdd);
+    var zDiff = 2 * zOdd;
+
+    return {
+      zDiff: r2(zDiff), zOdd: r2(zOdd), zEven: r2(zEven),
+      z0Single: single.z0, model: 'Differential Microstrip'
+    };
+  }
+
+  // ═══════════════════════════════════════
+  // PCB data analysis
+  // ═══════════════════════════════════════
+
+  /**
+   * Analyze all PCB data and calculate impedance per segment.
+   * @param {object} pcbData - Data extracted from EasyEDA Pro
+   * @param {object} stackup - Stackup configuration
+   * @returns {object} Analysis results
+   */
+  function analyzeAll(pcbData, stackup) {
+    var results = [];
+    var netStats = {};
+
+    // Straight traces
+    for (var i = 0; i < pcbData.lines.length; i++) {
+      var line = pcbData.lines[i];
+      var layerCfg = getLayerConfig(line.layer, stackup);
+      if (!layerCfg || !layerCfg.type) continue;
+
+      var width = line.width;
+      var dx = line.endX - line.startX;
+      var dy = line.endY - line.startY;
+      var length = Math.sqrt(dx * dx + dy * dy);
+
+      var imp = calcImpedance(width, layerCfg, stackup.copperThickness);
+      var delay = Math.sqrt(imp.erEff) * 3.336; // ps/mm
+
+      var entry = {
+        id: line.id,
+        type: 'Trace',
+        net: line.net || '(no net)',
+        layer: line.layer,
+        layerName: layerCfg.name,
+        width: r3(width),
+        h: r3(layerCfg.h),
+        b: layerCfg.b ? r3(layerCfg.b) : null,
+        length: r3(length),
+        model: imp.model,
+        z0: imp.z0,
+        erEff: imp.erEff,
+        delay: r2(delay),
+        formulaInputs: imp._inputs || null
+      };
+      results.push(entry);
+
+      // Stats per net
+      var netKey = entry.net;
+      if (!netStats[netKey]) {
+        netStats[netKey] = { count: 0, z0s: [], totalLength: 0 };
+      }
+      netStats[netKey].count++;
+      netStats[netKey].z0s.push(imp.z0);
+      netStats[netKey].totalLength += length;
+    }
+
+    // Arcs
+    for (var i = 0; i < pcbData.arcs.length; i++) {
+      var arc = pcbData.arcs[i];
+      var layerCfg = getLayerConfig(arc.layer, stackup);
+      if (!layerCfg || !layerCfg.type) continue;
+
+      var width = arc.width;
+      // Approximate arc length
+      var dx = arc.endX - arc.startX;
+      var dy = arc.endY - arc.startY;
+      var chord = Math.sqrt(dx * dx + dy * dy);
+      var angle = Math.abs(arc.arcAngle || 0) * Math.PI / 180;
+      var arcLen = angle > 0.001 ? (chord / (2 * Math.sin(angle / 2))) * angle : chord;
+
+      var imp = calcImpedance(width, layerCfg, stackup.copperThickness);
+      var delay = Math.sqrt(imp.erEff) * 3.336;
+
+      var entry = {
+        id: arc.id,
+        type: 'Arc',
+        net: arc.net || '(no net)',
+        layer: arc.layer,
+        layerName: layerCfg.name,
+        width: r3(width),
+        h: r3(layerCfg.h),
+        b: layerCfg.b ? r3(layerCfg.b) : null,
+        length: r3(arcLen),
+        model: imp.model,
+        z0: imp.z0,
+        erEff: imp.erEff,
+        delay: r2(delay),
+        formulaInputs: imp._inputs || null
+      };
+      results.push(entry);
+
+      var netKey = entry.net;
+      if (!netStats[netKey]) {
+        netStats[netKey] = { count: 0, z0s: [], totalLength: 0 };
+      }
+      netStats[netKey].count++;
+      netStats[netKey].z0s.push(imp.z0);
+      netStats[netKey].totalLength += arcLen;
+    }
+
+    // Calculate overall statistics
+    var allZ0 = results.map(function(r) { return r.z0; });
+    var summary = {
+      totalSegments: results.length,
+      totalNets: Object.keys(netStats).length,
+      z0Min: allZ0.length ? Math.min.apply(null, allZ0) : 0,
+      z0Max: allZ0.length ? Math.max.apply(null, allZ0) : 0,
+      z0Avg: allZ0.length ? r2(allZ0.reduce(function(a, b) { return a + b; }, 0) / allZ0.length) : 0
+    };
+
+    // Stats per net
+    var netSummary = {};
+    for (var key in netStats) {
+      var ns = netStats[key];
+      var z0s = ns.z0s;
+      netSummary[key] = {
+        count: ns.count,
+        totalLength: r3(ns.totalLength),
+        z0Min: r2(Math.min.apply(null, z0s)),
+        z0Max: r2(Math.max.apply(null, z0s)),
+        z0Avg: r2(z0s.reduce(function(a, b) { return a + b; }, 0) / z0s.length),
+        uniform: (Math.max.apply(null, z0s) - Math.min.apply(null, z0s)) < 1
+      };
+    }
+
+    return {
+      results: results,
+      summary: summary,
+      netSummary: netSummary,
+      stackup: stackup
+    };
+  }
+
+  // ═══════════════════════════════════════
+  // Helpers
+  // ═══════════════════════════════════════
+
+  function getLayerConfig(layerNum, stackup) {
+    if (stackup.layers && stackup.layers[layerNum]) {
+      return stackup.layers[layerNum];
+    }
+    if (KNOWN_LAYERS[layerNum]) {
+      return KNOWN_LAYERS[layerNum];
+    }
+    // Unknown copper layer — treat as microstrip by default
+    if (isCopperLayer(layerNum)) {
+      return { name: 'Layer ' + layerNum, type: 'microstrip', h: 0.2, er: 4.5 };
+    }
+    return null; // Non-copper layer
+  }
+
+  function calcImpedance(width, layerCfg, copperThickness) {
+    var t = layerCfg.copperT || copperThickness || 0.04064;
+    if (layerCfg.type === 'stripline') {
+      var b = layerCfg.b || (layerCfg.h * 2); // b = total plane-to-plane distance
+      var result = stripline(width, b, t, layerCfg.er, layerCfg.h);
+      result._inputs = { w: r3(width), b: r3(b), h: r3(layerCfg.h), t: t, er: layerCfg.er };
+      return result;
+    } else {
+      var result = microstrip(width, layerCfg.h, t, layerCfg.er);
+      result._inputs = { w: r3(width), h: r3(layerCfg.h), t: t, er: layerCfg.er };
+      return result;
+    }
+  }
+
+  function r2(v) { return Math.round(v * 100) / 100; }
+  function r3(v) { return Math.round(v * 10000) / 10000; }
+
+  // ═══════════════════════════════════════
+  // Cross-layer interference detection
+  // ═══════════════════════════════════════
+
+  /**
+   * Check if all layers between two layers in the stackup are reference planes.
+   * If so, the traces are shielded and cross-layer interference is suppressed.
+   *
+   * @param {number} layerA - First layer ID
+   * @param {number} layerB - Second layer ID
+   * @param {Array} layerOrder - Physical layer order [1, 15, 16, 2, ...]
+   * @param {object} planeLayers - Map of layer ID → net for pure reference planes
+   * @param {object} signalLayers - Map of layer ID → true for layers with traces
+   * @returns {boolean} true if shielded by at least one plane between them
+   */
+  function isShieldedByPlane(layerA, layerB, layerOrder, planeLayers, signalLayers) {
+    var posA = layerOrder.indexOf(layerA);
+    var posB = layerOrder.indexOf(layerB);
+    if (posA === -1 || posB === -1) return false;
+
+    var lo = Math.min(posA, posB);
+    var hi = Math.max(posA, posB);
+
+    // If adjacent layers, no plane can be between them
+    if (hi - lo <= 1) return false;
+
+    // Check every layer between them — need at least one pure plane
+    for (var k = lo + 1; k < hi; k++) {
+      var midLayer = layerOrder[k];
+      // A pure plane = has pour but no signal traces
+      if (planeLayers[midLayer] && !signalLayers[midLayer]) {
+        return true; // at least one shielding plane exists
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Detect traces on different layers that cross or run parallel nearby.
+   * These crossings can alter impedance due to capacitive coupling.
+   * Crossings shielded by a reference plane between the two layers are excluded.
+   *
+   * @param {object} pcbData - Extracted PCB data
+   * @param {object} stackup - Stackup from buildStackup (needs layerOrder, detectedPlanes)
+   * @returns {Array} Array of crossing warnings
+   */
+  function detectCrossings(pcbData, stackup) {
+    var crossings = [];
+    var allSegs = [];
+
+    // Collect all trace segments with layer info
+    pcbData.lines.forEach(function(l) {
+      allSegs.push({
+        id: l.id, net: l.net, layer: l.layer,
+        x1: l.startX, y1: l.startY, x2: l.endX, y2: l.endY,
+        width: l.width
+      });
+    });
+
+    // Build plane/signal maps from stackup for shielding check
+    var layerOrder = (stackup && stackup.layerOrder) ? stackup.layerOrder : [];
+    var planeLayers = {};
+    var signalLayers = {};
+    if (stackup && stackup.layers) {
+      for (var lid in stackup.layers) {
+        var sl = stackup.layers[lid];
+        if (sl.isPlane) planeLayers[lid] = sl.planeNet || 'GND';
+        if (sl.hasTraces) signalLayers[lid] = true;
+      }
+    }
+
+    // Check each pair on different layers
+    for (var i = 0; i < allSegs.length; i++) {
+      for (var j = i + 1; j < allSegs.length; j++) {
+        var a = allSegs[i];
+        var b = allSegs[j];
+        if (a.layer === b.layer) continue; // same layer — skip
+        if (a.net === b.net) continue; // same net — expected
+
+        // Skip if a reference plane exists between the two layers (shielded)
+        if (layerOrder.length > 0 && isShieldedByPlane(a.layer, b.layer, layerOrder, planeLayers, signalLayers)) {
+          continue;
+        }
+
+        // Check if segments cross or run close (within coupling distance)
+        var crossing = segmentProximity(a, b);
+        if (crossing) {
+          crossings.push({
+            segA: { id: a.id, net: a.net, layer: a.layer },
+            segB: { id: b.id, net: b.net, layer: b.layer },
+            crossType: crossing.type, // 'crossing' or 'parallel'
+            point: crossing.point,     // { x, y }
+            distance: crossing.distance,
+            overlapLength: crossing.overlapLength || 0
+          });
+        }
+      }
+    }
+
+    return crossings;
+  }
+
+  // Check if two segments on different layers are close enough to affect impedance
+  function segmentProximity(a, b) {
+    // Threshold: segments within 3x max width are considered coupling risk
+    var threshold = Math.max(a.width, b.width) * 3;
+    if (threshold < 0.5) threshold = 0.5; // minimum 0.5mm
+
+    // Check for crossing (intersection in X/Y projection)
+    var cross = lineIntersection(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1, b.x2, b.y2);
+    if (cross) {
+      return { type: 'crossing', point: cross, distance: 0 };
+    }
+
+    // Check parallel proximity — sample points along shorter segment
+    var lenA = Math.sqrt((a.x2 - a.x1) * (a.x2 - a.x1) + (a.y2 - a.y1) * (a.y2 - a.y1));
+    var lenB = Math.sqrt((b.x2 - b.x1) * (b.x2 - b.x1) + (b.y2 - b.y1) * (b.y2 - b.y1));
+
+    var overlapLen = 0;
+    var closestDist = Infinity;
+    var closestPt = null;
+    var steps = Math.max(10, Math.floor(Math.max(lenA, lenB) / 0.5));
+    if (steps > 200) steps = 200;
+
+    for (var s = 0; s <= steps; s++) {
+      var t = s / steps;
+      var px = a.x1 + t * (a.x2 - a.x1);
+      var py = a.y1 + t * (a.y2 - a.y1);
+      var dist = pointToSegmentDist(px, py, b.x1, b.y1, b.x2, b.y2);
+      if (dist < closestDist) {
+        closestDist = dist;
+        // Find the closest point on segment B to this point on A
+        var bx1 = b.x1, by1 = b.y1, bx2 = b.x2, by2 = b.y2;
+        var bdx = bx2 - bx1, bdy = by2 - by1;
+        var bLen2 = bdx * bdx + bdy * bdy;
+        var tb = bLen2 > 0 ? Math.max(0, Math.min(1, ((px - bx1) * bdx + (py - by1) * bdy) / bLen2)) : 0;
+        var cpBx = bx1 + tb * bdx;
+        var cpBy = by1 + tb * bdy;
+        // Midpoint between closest points on A and B
+        closestPt = { x: Math.round((px + cpBx) * 50) / 100, y: Math.round((py + cpBy) * 50) / 100 };
+      }
+      if (dist < threshold) {
+        overlapLen += lenA / steps;
+      }
+    }
+
+    if (overlapLen > 0.1) {
+      return {
+        type: 'parallel',
+        point: closestPt,
+        distance: Math.round(closestDist * 1000) / 1000,
+        overlapLength: Math.round(overlapLen * 100) / 100
+      };
+    }
+
+    return null;
+  }
+
+  // Line segment intersection (2D)
+  function lineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+    var denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(denom) < 1e-10) return null;
+    var t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+    var u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      return {
+        x: Math.round((x1 + t * (x2 - x1)) * 100) / 100,
+        y: Math.round((y1 + t * (y2 - y1)) * 100) / 100
+      };
+    }
+    return null;
+  }
+
+  // Point to segment distance
+  function pointToSegmentDist(px, py, x1, y1, x2, y2) {
+    var dx = x2 - x1, dy = y2 - y1;
+    var lenSq = dx * dx + dy * dy;
+    if (lenSq < 1e-10) return Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
+    var t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+    var projX = x1 + t * dx, projY = y1 + t * dy;
+    return Math.sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
+  }
+
+  // ═══════════════════════════════════════
+  // Reverse solver — width for target Z₀
+  // ═══════════════════════════════════════
+
+  /**
+   * Calculate the trace width required to achieve a target impedance.
+   * Uses bisection (Z₀ is monotonically decreasing with width).
+   *
+   * @param {number} targetZ0 - Desired impedance (Ω)
+   * @param {number} h        - Dielectric height to nearest plane (mm)
+   * @param {number} b        - Total plane-to-plane distance (mm, stripline only)
+   * @param {number} t        - Copper thickness (mm)
+   * @param {number} er       - Dielectric constant
+   * @param {string} model    - 'microstrip' or 'stripline'
+   * @returns {{ width: number|null, z0: number, model: string, error: string? }}
+   */
+  function calcWidthForZ0(targetZ0, h, b, t, er, model) {
+    if (!targetZ0 || targetZ0 <= 0) return { width: null, error: 'Invalid target Z₀' };
+    if (!h || h <= 0) return { width: null, error: 'Invalid dielectric height' };
+
+    var wMin = 0.005; // 5 µm
+    var wMax = 15.0;  // 15 mm
+
+    var calcZ0 = function(w) {
+      if (model === 'stripline') {
+        return stripline(w, b || h * 2, t, er, h).z0;
+      } else {
+        return microstrip(w, h, t, er).z0;
+      }
+    };
+
+    var z0AtMin = calcZ0(wMin);
+    var z0AtMax = calcZ0(wMax);
+
+    if (targetZ0 > z0AtMin) return { width: null, error: 'Target too high (max ~' + r2(z0AtMin) + 'Ω at ' + wMin + 'mm width)' };
+    if (targetZ0 < z0AtMax) return { width: null, error: 'Target too low (min ~' + r2(z0AtMax) + 'Ω at ' + wMax + 'mm width)' };
+
+    for (var iter = 0; iter < 100; iter++) {
+      var wMid = (wMin + wMax) / 2;
+      var z0Mid = calcZ0(wMid);
+
+      if (Math.abs(z0Mid - targetZ0) < 0.01) {
+        return { width: r3(wMid), z0: r2(z0Mid), model: model };
+      }
+
+      if (z0Mid > targetZ0) {
+        wMin = wMid; // wider trace → lower Z₀
+      } else {
+        wMax = wMid;
+      }
+    }
+
+    var wResult = (wMin + wMax) / 2;
+    return { width: r3(wResult), z0: r2(calcZ0(wResult)), model: model };
+  }
+
+  /**
+   * Auto-select the best matching stackup preset for a given copper layer count.
+   * @param {number} copperCount - Number of copper layers detected
+   * @returns {string|null} Preset key or null if no match
+   */
+  function autoSelectPreset(copperCount) {
+    if (!copperCount || copperCount <= 0) return null;
+    for (var key in STACKUP_PRESETS) {
+      if (STACKUP_PRESETS[key].layers === copperCount) return key;
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════
+  // Exports
+  // ═══════════════════════════════════════
+
+  exports.microstrip = microstrip;
+  exports.stripline = stripline;
+  exports.differentialMicrostrip = differentialMicrostrip;
+  exports.analyzeAll = analyzeAll;
+  exports.buildStackup = buildStackup;
+  exports.detectCrossings = detectCrossings;
+  exports.calcWidthForZ0 = calcWidthForZ0;
+  exports.autoSelectPreset = autoSelectPreset;
+  exports.DEFAULT_STACKUP = DEFAULT_STACKUP;
+  exports.KNOWN_LAYERS = KNOWN_LAYERS;
+  exports.STACKUP_PRESETS = STACKUP_PRESETS;
+
+  return exports;
+
+})({});

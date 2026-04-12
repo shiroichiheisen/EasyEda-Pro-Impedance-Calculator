@@ -1,0 +1,44 @@
+{
+	"name": "trace-impedance-calculator",
+	"uuid": "a7b3e1d4f09c48e6b5d2c8a1f3e7d9b0",
+	"displayName": "PCB Trace Impedance Calculator",
+	"description": "Calculates the characteristic impedance (Z₀) of each PCB trace segment — Microstrip, Stripline and Differential",
+	"version": "1.13.5",
+	"publisher": "",
+	"engines": {
+		"eda": "^3.0.0"
+	},
+	"license": "MIT",
+	"categories": "PCB",
+	"keywords": [
+		"PCB",
+		"impedance",
+		"trace",
+		"microstrip",
+		"stripline",
+		"signal-integrity"
+	],
+	"activationEvents": {},
+	"entry": "./dist/index",
+	"dependentExtensions": {},
+	"headerMenus": {
+		"pcb": [
+			{
+				"id": "TraceImpedance",
+				"title": "Trace Impedance",
+				"menuItems": [
+					{
+						"id": "RunCalc",
+						"title": "Calculate Impedance...",
+						"registerFn": "runImpedanceCalc"
+					},
+					{
+						"id": "About",
+						"title": "About...",
+						"registerFn": "about"
+					}
+				]
+			}
+		]
+	}
+}
