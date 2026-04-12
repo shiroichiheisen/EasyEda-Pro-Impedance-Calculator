@@ -28,7 +28,7 @@ var ImpedanceCalc = (function (exports) {
       boardThickness: 1.6,
       copperThickness: 0.04064,
       innerCopperThickness: 0.04064,
-      er: 4.5,
+      er: 4.581,
       gaps: null
     },
 
@@ -39,13 +39,13 @@ var ImpedanceCalc = (function (exports) {
       boardThickness: 1.6,
       copperThickness: 0.04064,
       innerCopperThickness: 0.0152,
-      er: 4.4,
-      // εr from JLCPCB: 7628 Prepreg Dk = 4.4, Core 1.1mm Dk = 4.41
+      er: 4.578,
+      // εr calibrated vs JLCPCB Polar Si9000: PP 7628 Dk = 4.578, Core Dk = 5.155
       // L1→L2: PP 7628 RC49% 8.6mil 0.2104mm
       // L2→L3: Core 1.1mm H/HOZ 1.065mm
       // L3→L4: PP 7628 RC49% 8.6mil 0.2104mm
       gaps: [0.2104, 1.065, 0.2104],
-      gapEr: [4.4, 4.41, 4.4]
+      gapEr: [4.578, 5.155, 4.578]
     },
 
     // ── 6-Layer ───────────────────────────────────
@@ -56,14 +56,14 @@ var ImpedanceCalc = (function (exports) {
       copperThickness: 0.04064,
       innerCopperThickness: 0.0152,
       er: 4.1,
-      // εr from JLCPCB: 3313 Prepreg Dk = 4.1, 2116 Dk = 4.16, Core 0.55mm Dk = 4.41
+      // εr calibrated vs JLCPCB Polar Si9000: 3313 Dk = 4.1, 2116 Dk = 4.16, Core Dk = 4.716
       // L1→L2: PP 3313 RC57% 4.2mil 0.0994mm
       // L2→L3: Core 0.55mm H/H 0.55mm
       // L3→L4: PP 2116 RC54% 4.9mil 0.1088mm
       // L4→L5: Core 0.55mm H/H 0.55mm
       // L5→L6: PP 3313 RC57% 4.2mil 0.0994mm
       gaps: [0.0994, 0.55, 0.1088, 0.55, 0.0994],
-      gapEr: [4.1, 4.41, 4.16, 4.41, 4.1]
+      gapEr: [4.1, 4.716, 4.16, 4.716, 4.1]
     },
 
     // ── 8-Layer ───────────────────────────────────
@@ -74,7 +74,7 @@ var ImpedanceCalc = (function (exports) {
       copperThickness: 0.04064,
       innerCopperThickness: 0.0152,
       er: 4.16,
-      // εr from JLCPCB: 2116 Prepreg Dk = 4.16, 1080 Dk = 3.91, Core 0.3mm Dk = 4.41
+      // εr calibrated vs JLCPCB Polar Si9000: 2116 Dk = 4.16, 1080 Dk = 3.91, Core Dk = 4.388
       // L1→L2: PP 2116 RC54% 4.9mil 0.1164mm
       // L2→L3: Core 0.3mm H/HOZ 0.3mm
       // L3→L4: 2×PP 1080 RC67% 3.3mil = 0.0764+0.0764 = 0.1528mm
@@ -83,7 +83,7 @@ var ImpedanceCalc = (function (exports) {
       // L6→L7: Core 0.3mm H/HOZ 0.3mm
       // L7→L8: PP 2116 RC54% 4.9mil 0.1164mm
       gaps: [0.1164, 0.3, 0.1528, 0.3, 0.1528, 0.3, 0.1164],
-      gapEr: [4.16, 4.41, 3.91, 4.41, 3.91, 4.41, 4.16]
+      gapEr: [4.16, 4.388, 3.91, 4.388, 3.91, 4.388, 4.16]
     }
   };
 
@@ -248,7 +248,8 @@ var ImpedanceCalc = (function (exports) {
           gapErValues[dg] = gapSum > 0 ? erWeightedSum / gapSum : presetEr;
         }
       } else if (numGaps === 1) {
-        spacings[0] = boardThickness;
+        // 2L: dielectric gap = board thickness minus both copper layers
+        spacings[0] = boardThickness - 2 * copperThickness;
         gapErValues[0] = presetEr;
       } else {
         // No preset or preset has fewer gaps — distribute evenly
