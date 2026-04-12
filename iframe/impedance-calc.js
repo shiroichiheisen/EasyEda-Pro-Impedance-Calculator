@@ -29,7 +29,9 @@ var ImpedanceCalc = (function (exports) {
       copperThickness: 0.04064,
       innerCopperThickness: 0.04064,
       er: 4.581,
-      gaps: null
+      gaps: null,
+      // Z0 correction vs JLCPCB Si9000: factor(u) = c0+c1*u+c2*u², u=w/h clamped to [uMin,uMax]
+      z0CorrMs: [1.013436, -0.013826, 0.002564, 1.2, 3.2]
     },
 
     // ── 4-Layer ───────────────────────────────────
@@ -45,7 +47,12 @@ var ImpedanceCalc = (function (exports) {
       // L2→L3: Core 1.1mm H/HOZ 1.065mm
       // L3→L4: PP 7628 RC49% 8.6mil 0.2104mm
       gaps: [0.2104, 1.065, 0.2104],
-      gapEr: [4.578, 5.155, 4.578]
+      gapEr: [4.578, 5.155, 4.578],
+      z0CorrMs: [1.014314, -0.015167, 0.003221, 1.0, 3.0],
+      z0CorrSl: [
+        [0.958744, 0.118261, -0.049965, 0.85, 2.4],
+        [0.958744, 0.118261, -0.049965, 0.85, 2.4]
+      ]
     },
 
     // ── 6-Layer ───────────────────────────────────
@@ -63,7 +70,14 @@ var ImpedanceCalc = (function (exports) {
       // L4→L5: Core 0.55mm H/H 0.55mm
       // L5→L6: PP 3313 RC57% 4.2mil 0.0994mm
       gaps: [0.0994, 0.55, 0.1088, 0.55, 0.0994],
-      gapEr: [4.1, 4.716, 4.16, 4.716, 4.1]
+      gapEr: [4.1, 4.716, 4.16, 4.716, 4.1],
+      z0CorrMs: [0.999023, -0.002007, 0.000840, 1.0, 4.0],
+      z0CorrSl: [
+        [1.003019, -0.010567, 0.003639, 0.8, 3.5],
+        [1.001246, -0.009527, 0.003406, 0.8, 3.5],
+        [1.001246, -0.009527, 0.003406, 0.8, 3.5],
+        [1.003019, -0.010567, 0.003639, 0.8, 3.5]
+      ]
     },
 
     // ── 8-Layer ───────────────────────────────────
@@ -83,7 +97,16 @@ var ImpedanceCalc = (function (exports) {
       // L6→L7: Core 0.3mm H/HOZ 0.3mm
       // L7→L8: PP 2116 RC54% 4.9mil 0.1164mm
       gaps: [0.1164, 0.3, 0.1528, 0.3, 0.1528, 0.3, 0.1164],
-      gapEr: [4.16, 4.388, 3.91, 4.388, 3.91, 4.388, 4.16]
+      gapEr: [4.16, 4.388, 3.91, 4.388, 3.91, 4.388, 4.16],
+      z0CorrMs: [0.998190, -0.000577, 0.000528, 1.0, 4.0],
+      z0CorrSl: [
+        [1.012955, -0.017940, 0.004619, 0.7, 3.0],
+        [1.012713, -0.017679, 0.004222, 0.7, 3.0],
+        [1.012713, -0.017679, 0.004222, 0.7, 3.0],
+        [1.012713, -0.017679, 0.004222, 0.7, 3.0],
+        [1.012713, -0.017679, 0.004222, 0.7, 3.0],
+        [1.012955, -0.017940, 0.004619, 0.7, 3.0]
+      ]
     }
   };
 
@@ -126,6 +149,18 @@ var ImpedanceCalc = (function (exports) {
   //   Overall hybrid: <1% error across all layers at 30/50/60Ω
 
   /**
+   * Apply empirical Z0 correction polynomial.
+   * factor(u) = c[0] + c[1]*u + c[2]*u², u = w/h clamped to [c[3], c[4]].
+   * Calibrated per preset vs JLCPCB Polar Si9000 field solver.
+   */
+  function applyZ0Corr(z0, w, h1, corr) {
+    if (!corr) return z0;
+    var u = w / h1;
+    if (corr.length >= 5) u = Math.max(corr[3], Math.min(corr[4], u));
+    return z0 * (corr[0] + corr[1] * u + corr[2] * u * u);
+  }
+
+  /**
    * Build stackup automatically from PCB data.
    * Detects copper layers dynamically from traces and copper pours.
    * Infers physical order: Top(1) → inner layers (sorted) → Bottom(2).
@@ -135,7 +170,7 @@ var ImpedanceCalc = (function (exports) {
    * @param {number} boardThickness - Total board thickness in mm (default 1.6)
    * @returns {object} Stackup configuration
    */
-  function buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuThickness, innerCuThickness, presetGapEr) {
+  function buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuThickness, innerCuThickness, presetGapEr, presetZ0CorrMs, presetZ0CorrSl) {
     if (!boardThickness) boardThickness = 1.6;
     if (!presetEr) presetEr = 4.6;
     if (!outerCuThickness) outerCuThickness = 0.04064;
@@ -377,6 +412,17 @@ var ImpedanceCalc = (function (exports) {
       var isOuterLayer = (layerNum === 1 || layerNum === 2);
       var layerCuT = isOuterLayer ? outerCuThickness : innerCuThickness;
 
+      // Z0 correction polynomial (calibrated vs JLCPCB Polar Si9000)
+      var layerZ0Corr = null;
+      if (isOuterLayer && presetZ0CorrMs) {
+        layerZ0Corr = presetZ0CorrMs;
+      } else if (!isOuterLayer && presetZ0CorrSl) {
+        var innerIdx = innerLayers.indexOf(layerNum);
+        if (innerIdx >= 0 && innerIdx < presetZ0CorrSl.length) {
+          layerZ0Corr = presetZ0CorrSl[innerIdx];
+        }
+      }
+
       stackupLayers[layerNum] = {
         name: layerName,
         type: type,
@@ -386,6 +432,7 @@ var ImpedanceCalc = (function (exports) {
         erNear: (type === 'stripline') ? r3(distUp <= distDown ? erUp : erDown) : null,
         erFar:  (type === 'stripline') ? r3(distUp <= distDown ? erDown : erUp) : null,
         copperT: layerCuT,
+        z0Corr: layerZ0Corr,
         isPlane: !!planeLayers[layerNum],
         planeNet: planeLayers[layerNum] || null,
         hasTraces: !!signalLayers[layerNum],
@@ -613,6 +660,7 @@ var ImpedanceCalc = (function (exports) {
     var spacing = opts.spacing;
     var erNear = opts.erNear;
     var erFar = opts.erFar;
+    var z0Corr = opts.z0Corr || null;
 
     if (!targetZ0 || targetZ0 <= 0) return { width: null, error: 'Invalid target Z₀' };
     if (!h || h <= 0) return { width: null, error: 'Invalid dielectric height' };
@@ -622,19 +670,22 @@ var ImpedanceCalc = (function (exports) {
     var wMax = 15.0;
 
     var calcZ0 = function(w) {
+      var rawZ0;
       if (type === 'differential') {
         if (model === 'stripline') {
-          return differentialStripline(w, b || h * 2, t, spacing, er, h, erNear, erFar).zDiff;
+          rawZ0 = differentialStripline(w, b || h * 2, t, spacing, er, h, erNear, erFar).zDiff;
         } else {
-          return differentialMicrostrip(w, h, t, spacing, er).zDiff;
+          rawZ0 = differentialMicrostrip(w, h, t, spacing, er).zDiff;
         }
       } else {
         if (model === 'stripline') {
-          return stripline(w, b || h * 2, t, er, h, erNear, erFar).z0;
+          rawZ0 = stripline(w, b || h * 2, t, er, h, erNear, erFar).z0;
         } else {
-          return microstrip(w, h, t, er).z0;
+          rawZ0 = microstrip(w, h, t, er).z0;
         }
+        if (z0Corr) rawZ0 = applyZ0Corr(rawZ0, w, h, z0Corr);
       }
+      return rawZ0;
     };
 
     var z0AtMin = calcZ0(wMin);
@@ -820,10 +871,16 @@ var ImpedanceCalc = (function (exports) {
     if (layerCfg.type === 'stripline') {
       var b = layerCfg.b || (layerCfg.h * 2); // b = total plane-to-plane distance
       var result = stripline(width, b, t, layerCfg.er, layerCfg.h, layerCfg.erNear, layerCfg.erFar);
+      if (layerCfg.z0Corr) {
+        result.z0 = r2(applyZ0Corr(result.z0, width, layerCfg.h, layerCfg.z0Corr));
+      }
       result._inputs = { w: r3(width), b: r3(b), h: r3(layerCfg.h), t: t, er: layerCfg.er, erNear: layerCfg.erNear, erFar: layerCfg.erFar };
       return result;
     } else {
       var result = microstrip(width, layerCfg.h, t, layerCfg.er);
+      if (layerCfg.z0Corr) {
+        result.z0 = r2(applyZ0Corr(result.z0, width, layerCfg.h, layerCfg.z0Corr));
+      }
       result._inputs = { w: r3(width), h: r3(layerCfg.h), t: t, er: layerCfg.er };
       return result;
     }
@@ -1097,6 +1154,7 @@ var ImpedanceCalc = (function (exports) {
   exports.detectCrossings = detectCrossings;
   exports.calcWidthForZ0 = calcWidthForZ0;
   exports.calcWidthForZ0Adv = calcWidthForZ0Adv;
+  exports.applyZ0Corr = applyZ0Corr;
   exports.autoSelectPreset = autoSelectPreset;
   exports.DEFAULT_STACKUP = DEFAULT_STACKUP;
   exports.KNOWN_LAYERS = KNOWN_LAYERS;

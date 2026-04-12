@@ -290,9 +290,11 @@ function onDataLoaded(pcbData) {
   var outerCuT = (preset && preset.copperThickness) ? preset.copperThickness : 0.04064;
   var innerCuT = (preset && preset.innerCopperThickness) ? preset.innerCopperThickness : 0.0152;
   var presetGapEr = (preset && preset.gapEr) ? preset.gapEr : null;
+  var presetZ0CorrMs = (preset && preset.z0CorrMs) ? preset.z0CorrMs : null;
+  var presetZ0CorrSl = (preset && preset.z0CorrSl) ? preset.z0CorrSl : null;
 
   // Always rebuild stackup from PCB data + preset
-  var autoStackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr);
+  var autoStackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr, presetZ0CorrMs, presetZ0CorrSl);
   autoStackup.preset = presetKey;
   currentStackup = autoStackup;
 
@@ -1009,11 +1011,11 @@ function computeCalcRowParams(d) {
     // Per-gap εr: erNear = εr of the gap on the near-plane side, erFar = far side
     var erNear = (hUp <= hDown) ? erUp : erDown;
     var erFar  = (hUp <= hDown) ? erDown : erUp;
-    return { model: 'stripline', h: h, b: b, t: t, er: er, erNear: erNear, erFar: erFar };
+    return { model: 'stripline', h: h, b: b, t: t, er: er, erNear: erNear, erFar: erFar, z0Corr: sigLayer.z0Corr };
   } else if (hasTop) {
-    return { model: 'microstrip', h: hUp, b: null, t: t, er: erUp };
+    return { model: 'microstrip', h: hUp, b: null, t: t, er: erUp, z0Corr: sigLayer.z0Corr };
   } else if (hasBot) {
-    return { model: 'microstrip', h: hDown, b: null, t: t, er: erDown };
+    return { model: 'microstrip', h: hDown, b: null, t: t, er: erDown, z0Corr: sigLayer.z0Corr };
   } else {
     return { error: 'Select at least one reference layer' };
   }
@@ -1043,7 +1045,8 @@ function runWidthCalcAll() {
       er: params.er,
       spacing: d.spacing,
       erNear: params.erNear,
-      erFar: params.erFar
+      erFar: params.erFar,
+      z0Corr: params.z0Corr
     });
 
     if (result.width !== null) {
