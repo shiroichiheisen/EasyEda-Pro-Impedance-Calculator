@@ -2,6 +2,10 @@
 
 An EasyEDA Pro extension that calculates the characteristic impedance (Z₀) of every trace segment on a PCB, using established RF/signal-integrity formulas (Hammerstad & Jensen for microstrip, Cohn/Wheeler for stripline, Kirschning & Jansen for differential microstrip). Reference standard: IPC-2141A.
 
+![Main Screen](img/start_screen.png)
+
+![Trace Impedance Visualization](img/imp_viz.png)
+
 ## Features
 
 - **Automatic extraction** of all lines, arcs, vias, pads and copper zones from the active PCB via the EasyEDA `eda.pcb_Primitive*` API.

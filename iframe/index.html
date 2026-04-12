@@ -169,35 +169,47 @@ tr:hover td { background: rgba(76,201,240,0.05); }
 
 <!-- Width Calculator Modal -->
 <div class="overlay" id="calc-overlay"></div>
-<div class="settings-panel" id="calc-panel">
-  <h2>📐 Width Calculator</h2>
-  <p style="font-size:12px;color:var(--fg2);margin-bottom:12px;">Calculate the required trace width for a target impedance on a specific layer.</p>
-  <label>Layer:</label>
-  <select id="calc-layer" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--input-fg);font-size:14px;margin-bottom:8px;"></select>
-  <div id="calc-layer-info" style="font-size:12px;color:var(--fg2);margin-bottom:12px;padding:8px 10px;background:var(--bg3);border-radius:4px;"></div>
-  <label>Target Impedance (Z₀):</label>
-  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-    <input type="number" id="calc-target-z0" value="50" min="1" max="500" step="1" style="width:100px;padding:8px 10px;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--input-fg);font-size:14px;">
-    <span style="font-size:14px;">Ω</span>
+<div class="settings-panel" id="calc-panel" style="width:900px;max-width:95vw;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <h2 style="margin-bottom:0;">📐 Width Calculator</h2>
+    <div style="display:flex;gap:8px;">
+      <button onclick="addCalcRow()" style="font-size:12px;padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;">+ New Impedance</button>
+      <button onclick="duplicateCalcRow()" style="font-size:12px;padding:4px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer;">⧉ Duplicate</button>
+      <button onclick="runWidthCalcAll()" style="font-size:12px;padding:4px 14px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Calculate</button>
+    </div>
   </div>
-  <div id="calc-result" style="min-height:60px;padding:12px;background:var(--bg3);border-radius:6px;margin-bottom:12px;"></div>
-  <div class="ref-table" style="margin-bottom:12px;">
-    <h3 style="font-size:12px;color:var(--fg2);margin-top:0;margin-bottom:4px;">Impedance Reference</h3>
-    <table>
-      <tr><td class="proto">USB 2.0/3.0</td><td>90Ω dif.</td></tr>
-      <tr><td class="proto">HDMI</td><td>100Ω dif.</td></tr>
-      <tr><td class="proto">Ethernet</td><td>100Ω dif.</td></tr>
-      <tr><td class="proto">RF 50Ω</td><td>50Ω SE</td></tr>
-      <tr><td class="proto">DDR3/4</td><td>40Ω SE</td></tr>
-      <tr><td class="proto">PCIe</td><td>85Ω dif.</td></tr>
-      <tr><td class="proto">SATA</td><td>90Ω dif.</td></tr>
-      <tr><td class="proto">LVDS</td><td>100Ω dif.</td></tr>
+  <p style="font-size:12px;color:var(--fg2);margin-bottom:12px;">Calculate the required trace width for a target impedance. Uses the current stackup.</p>
+  <div style="overflow-x:auto;">
+    <table id="calc-table" style="width:100%;font-size:12px;border-collapse:collapse;">
+      <thead>
+        <tr style="background:var(--bg3);">
+          <th style="padding:6px 8px;text-align:center;width:30px;">#</th>
+          <th style="padding:6px 8px;text-align:left;">Trace Name</th>
+          <th style="padding:6px 8px;text-align:center;">Z₀ (Ω)</th>
+          <th style="padding:6px 8px;text-align:left;">Type</th>
+          <th style="padding:6px 8px;text-align:left;">Signal Layer</th>
+          <th style="padding:6px 8px;text-align:left;">Top Ref</th>
+          <th style="padding:6px 8px;text-align:left;">Bottom Ref</th>
+          <th style="padding:6px 8px;text-align:center;">Spacing (mm)</th>
+          <th style="padding:6px 8px;text-align:center;">Width (mm)</th>
+          <th style="padding:6px 8px;width:30px;"></th>
+        </tr>
+      </thead>
+      <tbody id="calc-tbody"></tbody>
     </table>
-    <p style="margin-top:8px;font-size:10px;color:var(--fg2);">Cu: 0.5oz=0.015mm | 1oz (finished)=0.041mm | 2oz=0.070mm</p>
+  </div>
+  <div style="margin-top:12px;font-size:11px;color:var(--fg2);display:flex;gap:16px;flex-wrap:wrap;">
+    <span><strong style="color:var(--accent);">USB 2.0/3.0</strong> 90Ω dif.</span>
+    <span><strong style="color:var(--accent);">HDMI</strong> 100Ω dif.</span>
+    <span><strong style="color:var(--accent);">Ethernet</strong> 100Ω dif.</span>
+    <span><strong style="color:var(--accent);">RF 50Ω</strong> 50Ω SE</span>
+    <span><strong style="color:var(--accent);">DDR3/4</strong> 40Ω SE</span>
+    <span><strong style="color:var(--accent);">PCIe</strong> 85Ω dif.</span>
+    <span><strong style="color:var(--accent);">SATA</strong> 90Ω dif.</span>
+    <span><strong style="color:var(--accent);">LVDS</strong> 100Ω dif.</span>
   </div>
   <div class="actions">
     <button class="secondary" onclick="closeCalcPanel()">Close</button>
-    <button onclick="runWidthCalc()">Calculate</button>
   </div>
 </div>
 
@@ -793,24 +805,137 @@ async function saveStackupToStorage() {
 // ═══════════════════════════════════════
 // Width Calculator
 // ═══════════════════════════════════════
+var calcRowCounter = 0;
+
 document.getElementById('btn-widthcalc').addEventListener('click', openCalcPanel);
 
-function openCalcPanel() {
-  var sel = document.getElementById('calc-layer');
-  sel.innerHTML = '';
+function getCalcLayerOptions() {
+  // Build layer options from stackup: all copper layers in physical order
+  var opts = [];
   if (currentStackup && currentStackup.layerOrder) {
     currentStackup.layerOrder.forEach(function(lid) {
       var lc = currentStackup.layers[lid];
-      if (!lc || !lc.type) return; // skip pure plane layers
-      var opt = document.createElement('option');
-      opt.value = lid;
-      opt.textContent = lc.name + ' (' + lc.type + ')';
-      sel.appendChild(opt);
+      if (!lc) return;
+      opts.push({ value: String(lid), label: lc.name });
     });
   }
-  sel.onchange = updateCalcLayerInfo;
-  updateCalcLayerInfo();
-  document.getElementById('calc-result').innerHTML = '';
+  return opts;
+}
+
+function buildLayerSelect(name, includeNone) {
+  var layerOpts = getCalcLayerOptions();
+  var html = '<select name="' + esc(name) + '" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);">';
+  if (includeNone) html += '<option value="">/</option>';
+  layerOpts.forEach(function(o) {
+    html += '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>';
+  });
+  html += '</select>';
+  return html;
+}
+
+function createCalcRow(defaults) {
+  calcRowCounter++;
+  var idx = calcRowCounter;
+  var d = defaults || {};
+  var tr = document.createElement('tr');
+  tr.setAttribute('data-calc-row', idx);
+  tr.style.borderBottom = '1px solid var(--border)';
+
+  var layerOpts = getCalcLayerOptions();
+  // Default signal layer: first signal layer (non-plane), top ref: none, bottom ref: second layer
+  var defaultSignal = '';
+  var defaultTopRef = '';
+  var defaultBotRef = '';
+  if (layerOpts.length >= 1) defaultSignal = d.signal || layerOpts[0].value;
+  if (layerOpts.length >= 2) defaultBotRef = d.botRef || layerOpts[1].value;
+  defaultTopRef = d.topRef || '';
+
+  function layerSel(name, selVal, includeNone) {
+    var html = '<select name="' + name + '" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);">';
+    if (includeNone) html += '<option value=""' + (!selVal ? ' selected' : '') + '>/</option>';
+    layerOpts.forEach(function(o) {
+      var sel = (o.value === selVal) ? ' selected' : '';
+      html += '<option value="' + esc(o.value) + '"' + sel + '>' + esc(o.label) + '</option>';
+    });
+    html += '</select>';
+    return html;
+  }
+
+  var isDiff = (d.type === 'differential');
+  tr.innerHTML =
+    '<td style="padding:6px 4px;text-align:center;color:var(--fg2);">' + idx + '</td>' +
+    '<td style="padding:4px;"><input type="text" name="traceName" value="' + esc(d.traceName || '') + '" placeholder="e.g. USB_D+" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);"></td>' +
+    '<td style="padding:4px;text-align:center;"><input type="number" name="targetZ0" value="' + (d.targetZ0 || 50) + '" min="1" max="500" step="1" style="width:70px;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);text-align:center;"></td>' +
+    '<td style="padding:4px;"><select name="impType" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);">' +
+      '<option value="single"' + (!isDiff ? ' selected' : '') + '>Single-Ended</option>' +
+      '<option value="differential"' + (isDiff ? ' selected' : '') + '>Differential</option>' +
+    '</select></td>' +
+    '<td style="padding:4px;">' + layerSel('signalLayer', defaultSignal, false) + '</td>' +
+    '<td style="padding:4px;">' + layerSel('topRef', defaultTopRef, true) + '</td>' +
+    '<td style="padding:4px;">' + layerSel('botRef', defaultBotRef, true) + '</td>' +
+    '<td style="padding:4px;text-align:center;"><input type="number" name="spacing" value="' + (d.spacing || '') + '" min="0" step="0.01" placeholder="—" style="width:70px;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:3px;background:var(--input-bg);color:var(--input-fg);text-align:center;"' + (!isDiff ? ' disabled' : '') + '></td>' +
+    '<td style="padding:6px 4px;text-align:center;font-weight:700;color:var(--accent);font-size:13px;" name="result">—</td>' +
+    '<td style="padding:4px;text-align:center;"><button onclick="removeCalcRow(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 6px;" title="Remove">✕</button></td>';
+
+  // Toggle spacing enable on type change
+  var typeSelect = tr.querySelector('select[name="impType"]');
+  var spacingInput = tr.querySelector('input[name="spacing"]');
+  typeSelect.addEventListener('change', function() {
+    spacingInput.disabled = (typeSelect.value !== 'differential');
+    if (typeSelect.value !== 'differential') spacingInput.value = '';
+  });
+
+  return tr;
+}
+
+function addCalcRow(defaults) {
+  var tbody = document.getElementById('calc-tbody');
+  tbody.appendChild(createCalcRow(defaults));
+}
+
+function duplicateCalcRow() {
+  var tbody = document.getElementById('calc-tbody');
+  var rows = tbody.querySelectorAll('tr');
+  if (rows.length === 0) { addCalcRow(); return; }
+  var lastRow = rows[rows.length - 1];
+  var d = readCalcRow(lastRow);
+  addCalcRow(d);
+}
+
+function removeCalcRow(btn) {
+  var tr = btn.closest('tr');
+  var tbody = document.getElementById('calc-tbody');
+  if (tbody.querySelectorAll('tr').length <= 1) return; // keep at least 1
+  tr.remove();
+  renumberCalcRows();
+}
+
+function renumberCalcRows() {
+  var rows = document.getElementById('calc-tbody').querySelectorAll('tr');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].querySelector('td').textContent = i + 1;
+  }
+}
+
+function readCalcRow(tr) {
+  return {
+    traceName: tr.querySelector('input[name="traceName"]').value,
+    targetZ0: parseFloat(tr.querySelector('input[name="targetZ0"]').value) || 50,
+    type: tr.querySelector('select[name="impType"]').value,
+    signal: tr.querySelector('select[name="signalLayer"]').value,
+    topRef: tr.querySelector('select[name="topRef"]').value,
+    botRef: tr.querySelector('select[name="botRef"]').value,
+    spacing: parseFloat(tr.querySelector('input[name="spacing"]').value) || 0
+  };
+}
+
+function openCalcPanel() {
+  var tbody = document.getElementById('calc-tbody');
+  // Preserve existing rows if any, otherwise add default
+  if (tbody.querySelectorAll('tr').length === 0) {
+    calcRowCounter = 0;
+    addCalcRow();
+  }
   document.getElementById('calc-panel').classList.add('visible');
   document.getElementById('calc-overlay').classList.add('visible');
 }
@@ -822,42 +947,114 @@ function closeCalcPanel() {
 
 document.getElementById('calc-overlay').addEventListener('click', closeCalcPanel);
 
-function updateCalcLayerInfo() {
-  var lid = document.getElementById('calc-layer').value;
-  var lc = currentStackup.layers && currentStackup.layers[lid];
-  if (!lc) { document.getElementById('calc-layer-info').innerHTML = ''; return; }
-  var info = '<strong>Model:</strong> ' + esc(lc.type) +
-    ' &nbsp;|&nbsp; <strong>H:</strong> ' + lc.h + ' mm' +
-    ' &nbsp;|&nbsp; <strong>εr:</strong> ' + lc.er;
-  if (lc.b) info += ' &nbsp;|&nbsp; <strong>B:</strong> ' + lc.b + ' mm';
-  var cuT = lc.copperT || currentStackup.copperThickness || 0.04064;
-  info += ' &nbsp;|&nbsp; <strong>Cu:</strong> ' + (cuT * 1000).toFixed(1) + ' µm (' + (cuT <= 0.02 ? '0.5oz' : '1oz') + ')';
-  document.getElementById('calc-layer-info').innerHTML = info;
+function computeCalcRowParams(d) {
+  // Given signal layer, top ref, bot ref — compute h, b, er, model, t
+  var sigLid = d.signal;
+  var topLid = d.topRef;
+  var botLid = d.botRef;
+  var sigLayer = currentStackup.layers && currentStackup.layers[sigLid];
+  if (!sigLayer) return { error: 'Unknown signal layer' };
+
+  var layerOrder = currentStackup.layerOrder || [];
+  var spacings = currentStackup.spacings || {};
+  var gapErValues = currentStackup.gapErValues || {};
+  var sigPos = layerOrder.indexOf(Number(sigLid));
+  if (sigPos === -1) return { error: 'Signal layer not in stackup' };
+
+  var t = sigLayer.copperT || currentStackup.copperThickness || 0.04064;
+  var defaultEr = currentStackup.er || 4.6;
+
+  // Calculate distance from signal to top ref
+  var hUp = null, erUp = defaultEr;
+  if (topLid) {
+    var topPos = layerOrder.indexOf(Number(topLid));
+    if (topPos !== -1 && topPos < sigPos) {
+      var dist = 0, erW = 0;
+      for (var g = topPos; g < sigPos; g++) {
+        var gd = spacings[g] || 0.2;
+        dist += gd;
+        erW += gd * (gapErValues[g] || defaultEr);
+      }
+      hUp = dist;
+      erUp = dist > 0 ? erW / dist : defaultEr;
+    }
+  }
+
+  // Calculate distance from signal to bottom ref
+  var hDown = null, erDown = defaultEr;
+  if (botLid) {
+    var botPos = layerOrder.indexOf(Number(botLid));
+    if (botPos !== -1 && botPos > sigPos) {
+      var dist = 0, erW = 0;
+      for (var g = sigPos; g < botPos; g++) {
+        var gd = spacings[g] || 0.2;
+        dist += gd;
+        erW += gd * (gapErValues[g] || defaultEr);
+      }
+      hDown = dist;
+      erDown = dist > 0 ? erW / dist : defaultEr;
+    }
+  }
+
+  // Determine model
+  var hasTop = (hUp !== null);
+  var hasBot = (hDown !== null);
+  if (hasTop && hasBot) {
+    // Stripline
+    var h = Math.min(hUp, hDown);
+    var b = hUp + hDown;
+    // Weighted average εr from all gaps
+    var totalD = hUp + hDown;
+    var er = totalD > 0 ? (erUp * hUp + erDown * hDown) / totalD : defaultEr;
+    // Per-gap εr: erNear = εr of the gap on the near-plane side, erFar = far side
+    var erNear = (hUp <= hDown) ? erUp : erDown;
+    var erFar  = (hUp <= hDown) ? erDown : erUp;
+    return { model: 'stripline', h: h, b: b, t: t, er: er, erNear: erNear, erFar: erFar };
+  } else if (hasTop) {
+    return { model: 'microstrip', h: hUp, b: null, t: t, er: erUp };
+  } else if (hasBot) {
+    return { model: 'microstrip', h: hDown, b: null, t: t, er: erDown };
+  } else {
+    return { error: 'Select at least one reference layer' };
+  }
 }
 
-function runWidthCalc() {
-  var lid = document.getElementById('calc-layer').value;
-  var lc = currentStackup.layers && currentStackup.layers[lid];
-  if (!lc || !lc.type) return;
-  var tgtZ0 = parseFloat(document.getElementById('calc-target-z0').value) || 50;
-  var cuT = lc.copperT || currentStackup.copperThickness || 0.04064;
-  var result = ImpedanceCalc.calcWidthForZ0(tgtZ0, lc.h, lc.b, cuT, lc.er, lc.type);
-  var el = document.getElementById('calc-result');
-  if (result.width !== null && result.width !== undefined) {
-    var widthMils = result.width / 0.0254;
-    var warning = '';
-    if (widthMils < 4) {
-      warning = '<div style="margin-top:8px;padding:8px 12px;background:rgba(244,67,54,0.15);border:1px solid var(--red);border-radius:6px;font-size:12px;color:var(--red);">' +
-        '<strong>⚠ Warning:</strong> Trace width (' + widthMils.toFixed(1) + ' mils) is below <strong>4 mils</strong> — most PCB manufacturers (including JLCPCB) may not be able to fabricate this. Consider a lower target Z₀ or a different stackup.' +
-        '</div>';
+function runWidthCalcAll() {
+  var tbody = document.getElementById('calc-tbody');
+  var rows = tbody.querySelectorAll('tr');
+  for (var i = 0; i < rows.length; i++) {
+    var tr = rows[i];
+    var d = readCalcRow(tr);
+    var params = computeCalcRowParams(d);
+    var resultCell = tr.querySelector('td[name="result"]');
+
+    if (params.error) {
+      resultCell.innerHTML = '<span style="color:var(--red);font-size:11px;">' + esc(params.error) + '</span>';
+      continue;
     }
-    el.innerHTML =
-      '<div style="font-size:28px;font-weight:700;color:var(--accent);">' + result.width + ' mm</div>' +
-      '<div style="color:var(--fg2);font-size:13px;">(' + widthMils.toFixed(1) + ' mils)</div>' +
-      '<div style="font-size:12px;color:var(--fg2);margin-top:6px;">Achieved Z₀ = ' + result.z0 + ' Ω (' + esc(result.model) + ')</div>' +
-      warning;
-  } else {
-    el.innerHTML = '<div style="color:var(--red);">' + esc(result.error || 'Cannot calculate') + '</div>';
+
+    var result = ImpedanceCalc.calcWidthForZ0Adv({
+      targetZ0: d.targetZ0,
+      type: d.type,
+      model: params.model,
+      h: params.h,
+      b: params.b,
+      t: params.t,
+      er: params.er,
+      spacing: d.spacing,
+      erNear: params.erNear,
+      erFar: params.erFar
+    });
+
+    if (result.width !== null) {
+      var widthMils = result.width / 0.0254;
+      var warning = widthMils < 4 ? ' <span title="Below 4 mil minimum" style="color:var(--red);">⚠</span>' : '';
+      resultCell.innerHTML =
+        '<span style="color:var(--accent);font-weight:700;">' + result.width + ' mm</span>' +
+        '<br><span style="font-size:10px;color:var(--fg2);">(' + widthMils.toFixed(1) + ' mil) ' + esc(result.model) + '</span>' + warning;
+    } else {
+      resultCell.innerHTML = '<span style="color:var(--red);font-size:11px;">' + esc(result.error || 'Error') + '</span>';
+    }
   }
 }
 
