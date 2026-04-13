@@ -176,6 +176,8 @@ tr:hover td { background: rgba(76,201,240,0.05); }
       <button onclick="addCalcRow()" style="font-size:12px;padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:4px;cursor:pointer;">+ New Impedance</button>
       <button onclick="duplicateCalcRow()" style="font-size:12px;padding:4px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer;">⧉ Duplicate</button>
       <button onclick="runWidthCalcAll()" style="font-size:12px;padding:4px 14px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Calculate</button>
+      <button onclick="exportCalcResults()" style="font-size:12px;padding:4px 12px;background:var(--fg2);color:#fff;border:none;border-radius:4px;cursor:pointer;">📋 Export</button>
+      <button onclick="clearCalcRows()" style="font-size:12px;padding:4px 12px;background:var(--red);color:#fff;border:none;border-radius:4px;cursor:pointer;">🗑 Clear All</button>
     </div>
   </div>
   <p style="font-size:12px;color:var(--fg2);margin-bottom:12px;">Calculate the required trace width for a target impedance. Uses the current stackup.</p>
@@ -945,6 +947,73 @@ function openCalcPanel() {
 function closeCalcPanel() {
   document.getElementById('calc-panel').classList.remove('visible');
   document.getElementById('calc-overlay').classList.remove('visible');
+}
+
+function clearCalcRows() {
+  var tbody = document.getElementById('calc-tbody');
+  tbody.innerHTML = '';
+  calcRowCounter = 0;
+  addCalcRow();
+}
+
+function exportCalcResults() {
+  var tbody = document.getElementById('calc-tbody');
+  var rows = tbody.querySelectorAll('tr');
+  if (rows.length === 0) return;
+  var lines = ['#\tName\tZ0 (Ω)\tType\tSignal\tTop Ref\tBot Ref\tSpacing (mm)\tWidth (mm)\tWidth (mil)\tModel'];
+  for (var i = 0; i < rows.length; i++) {
+    var tr = rows[i];
+    var d = readCalcRow(tr);
+    var params = computeCalcRowParams(d);
+    var wMm = '', wMil = '', model = '';
+    if (!params.error) {
+      var result = ImpedanceCalc.calcWidthForZ0Adv({
+        targetZ0: d.targetZ0, type: d.type, model: params.model,
+        h: params.h, b: params.b, t: params.t, er: params.er,
+        spacing: d.spacing, erNear: params.erNear, erFar: params.erFar,
+        z0Corr: params.z0Corr
+      });
+      if (result.width !== null) {
+        wMm = result.width;
+        wMil = (result.width / 0.0254).toFixed(1);
+        model = result.model;
+      } else {
+        wMm = result.error || 'Error';
+      }
+    } else {
+      wMm = params.error;
+    }
+    var sigName = '', topName = '', botName = '';
+    if (currentStackup.layers) {
+      if (currentStackup.layers[d.signal]) sigName = currentStackup.layers[d.signal].name;
+      if (d.topRef && currentStackup.layers[d.topRef]) topName = currentStackup.layers[d.topRef].name;
+      if (d.botRef && currentStackup.layers[d.botRef]) botName = currentStackup.layers[d.botRef].name;
+    }
+    lines.push((i+1) + '\t' + (d.traceName||'') + '\t' + d.targetZ0 + '\t' + d.type + '\t' + sigName + '\t' + topName + '\t' + botName + '\t' + (d.spacing||'') + '\t' + wMm + '\t' + wMil + '\t' + model);
+  }
+  var text = lines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('Copied to clipboard (paste into Excel/Sheets)');
+    });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('Copied to clipboard');
+  }
+}
+
+function showToast(msg) {
+  var t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:8px 20px;border-radius:6px;font-size:13px;z-index:10000;opacity:0;transition:opacity 0.3s;';
+  document.body.appendChild(t);
+  requestAnimationFrame(function() { t.style.opacity = '1'; });
+  setTimeout(function() { t.style.opacity = '0'; setTimeout(function() { t.remove(); }, 300); }, 2000);
 }
 
 document.getElementById('calc-overlay').addEventListener('click', closeCalcPanel);
