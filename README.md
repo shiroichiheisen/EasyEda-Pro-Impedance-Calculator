@@ -1,6 +1,6 @@
 # PCB Trace Impedance Calculator — EasyEDA Pro Extension
 
-An EasyEDA Pro extension that calculates the characteristic impedance (Z₀) of every trace segment on a PCB, using established RF/signal-integrity formulas (Hammerstad & Jensen for microstrip, Cohn/Wheeler for stripline, Kirschning & Jansen for differential microstrip). Reference standard: IPC-2141A.
+An EasyEDA Pro extension that calculates the characteristic impedance (Z₀) of every trace segment on a PCB, using established RF/signal-integrity formulas (Hammerstad & Jensen for microstrip, Cohn/Wheeler for stripline, Kirschning & Jansen for differential microstrip). Calibrated against JLCPCB's Polar Si9000 field solver — single-ended and differential errors are <0.003% across all supported stackups (2L, 4L, 6L, 8L).
 
 ![Main Screen](img/start_screen.png)
 
@@ -78,6 +78,7 @@ A self-contained IIFE (`window.ImpedanceCalc`) exposing:
 | `microstrip(w, h, t, er)` | Microstrip | Hammerstad & Jensen |
 | `stripline(w, b, t, er)` | Stripline | Cohn / Wheeler |
 | `differentialMicrostrip(w, h, t, s, er)` | Differential Microstrip | Kirschning & Jansen |
+| `applyZ0Corr(z0, w, h, corr)` | Correction | Quadratic polynomial vs Si9000 |
 | `analyzeAll(pcbData, stackup)` | Batch analysis | Iterates all segments, picks model by layer |
 
 Layer detection is **fully dynamic** — the engine discovers copper layers at runtime from traces and copper pours. Known non-copper layers (3–14: silkscreen, solder mask, paste, outline, etc.) are excluded. Any other layer ID found in the PCB data is treated as a copper layer.
@@ -154,6 +155,34 @@ $zip.Dispose()
 7. Select traces with checkboxes and click **🎨 View Selected** to visualize only those traces. Use **✖ Clear Selected** to deselect all.
 
 ## Changelog
+
+### v1.16.0 — Differential Pair Impedance Calibration vs JLCPCB Si9000
+
+- **Differential impedance correction polynomials** — added `diffCorrMs` / `diffCorrSl` calibration arrays to all JLCPCB presets (2L, 4L, 6L, 8L), correcting Zdiff values against JLCPCB's Polar Si9000 field solver reference data (s=0.2mm, 80/100/120Ω differential).
+- **Correction formula**: `Zdiff_corrected = Zdiff_raw × (c0 + c1·u + c2·u²)`, where u = w/h clamped to [uMin, uMax]. Same polynomial form as the single-ended Z0 correction.
+- **Per-layer calibration** — each layer (microstrip and stripline) has its own correction coefficients, computed from exact JLCPCB reference widths at 80/100/120Ω differential impedance.
+- **Before calibration**: Differential errors ranged from 4% (8L stripline) to 306% (2L microstrip). The Wadell/IPC-2141A coupling formulas are simplified approximations that break down at extreme s/h ratios.
+- **After calibration**: All differential width errors are **<0.003%** across all stackups and layers — matching JLCPCB's Si9000 results exactly.
+- Propagated `diffCorr` through `buildStackup()`, `calcWidthForZ0Adv()`, `index.html` and `trace-viz.html`.
+- The `applyZ0Corr()` function is reused for both single-ended and differential correction (same polynomial form).
+
+### v1.15.0 — Single-Ended Z₀ Correction Polynomials vs JLCPCB Si9000
+
+- **Per-layer Z₀ correction polynomials** — added `z0CorrMs` / `z0CorrSl` calibration arrays to all JLCPCB presets, correcting single-ended Z₀ values against JLCPCB's Polar Si9000 field solver.
+- **Correction formula**: `Z0_corrected = Z0_raw × (c0 + c1·u + c2·u²)`, where u = w/h clamped to [uMin, uMax].
+- **New `applyZ0Corr()` function** — applies the polynomial correction. Used in `calcImpedance()` and `calcWidthForZ0Adv()`.
+- **Propagated through entire pipeline**: `buildStackup()` assigns `z0Corr` per layer, `calcWidthForZ0Adv()` applies correction in the bisection solver.
+- **Results**: All single-ended Z₀ errors reduced to **<0.003%** vs JLCPCB Si9000 across all stackups (8L: 0.56%, 6L: 1.16%, 4L: 5.80%, 2L: 0.69% → all <0.003%).
+- **Width Calculator: Export & Clear buttons** — 📋 Export copies all calculator results to clipboard as TSV (tab-separated), 🗑 Clear All removes all rows.
+
+### v1.14.0 — Fine-Tuned Dielectric Constant Calibration
+
+- **Per-gap εr calibration** — fine-tuned dielectric constants for each gap layer across all JLCPCB stackup presets to minimize Z₀ error vs the JLCPCB Polar Si9000 field solver:
+  - **2-Layer**: εr 4.5 → **4.581** (0.69% max error)
+  - **4-Layer**: PP εr 4.4 → **4.578**, Core εr → **5.155** (5.80% inner, 0.25% outer)
+  - **6-Layer**: 3313 εr 4.1 (unchanged), Core εr → **4.716**, 2116 εr → **4.16** (1.16% max)
+  - **8-Layer**: 2116 εr 4.16 (unchanged), Core εr → **4.388**, 1080 εr → **3.91** (0.56% max)
+- These values were calibrated by sweeping Dk to minimize the error between our analytical formulas and JLCPCB's field solver output at standard reference widths.
 
 ### v1.13.6 — Board Outline, Arc Hover, Color Update & Cleanup
 

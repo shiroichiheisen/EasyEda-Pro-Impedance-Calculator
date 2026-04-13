@@ -1094,8 +1094,10 @@ async function loadData() {
     var presetGapEr = (preset && preset.gapEr) ? preset.gapEr : null;
     var presetZ0CorrMs = (preset && preset.z0CorrMs) ? preset.z0CorrMs : null;
     var presetZ0CorrSl = (preset && preset.z0CorrSl) ? preset.z0CorrSl : null;
+    var presetDiffCorrMs = (preset && preset.diffCorrMs) ? preset.diffCorrMs : null;
+    var presetDiffCorrSl = (preset && preset.diffCorrSl) ? preset.diffCorrSl : null;
 
-    stackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr, presetZ0CorrMs, presetZ0CorrSl);
+    stackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr, presetZ0CorrMs, presetZ0CorrSl, presetDiffCorrMs, presetDiffCorrSl);
     analysisResults = ImpedanceCalc.analyzeAll(pcbData, stackup);
 
     // Detect crossings (pass stackup so shielded crossings are excluded)

@@ -294,9 +294,11 @@ function onDataLoaded(pcbData) {
   var presetGapEr = (preset && preset.gapEr) ? preset.gapEr : null;
   var presetZ0CorrMs = (preset && preset.z0CorrMs) ? preset.z0CorrMs : null;
   var presetZ0CorrSl = (preset && preset.z0CorrSl) ? preset.z0CorrSl : null;
+  var presetDiffCorrMs = (preset && preset.diffCorrMs) ? preset.diffCorrMs : null;
+  var presetDiffCorrSl = (preset && preset.diffCorrSl) ? preset.diffCorrSl : null;
 
   // Always rebuild stackup from PCB data + preset
-  var autoStackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr, presetZ0CorrMs, presetZ0CorrSl);
+  var autoStackup = ImpedanceCalc.buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuT, innerCuT, presetGapEr, presetZ0CorrMs, presetZ0CorrSl, presetDiffCorrMs, presetDiffCorrSl);
   autoStackup.preset = presetKey;
   currentStackup = autoStackup;
 
@@ -971,7 +973,8 @@ function exportCalcResults() {
         targetZ0: d.targetZ0, type: d.type, model: params.model,
         h: params.h, b: params.b, t: params.t, er: params.er,
         spacing: d.spacing, erNear: params.erNear, erFar: params.erFar,
-        z0Corr: params.z0Corr
+        z0Corr: params.z0Corr,
+        diffCorr: params.diffCorr
       });
       if (result.width !== null) {
         wMm = result.width;
@@ -1080,11 +1083,11 @@ function computeCalcRowParams(d) {
     // Per-gap εr: erNear = εr of the gap on the near-plane side, erFar = far side
     var erNear = (hUp <= hDown) ? erUp : erDown;
     var erFar  = (hUp <= hDown) ? erDown : erUp;
-    return { model: 'stripline', h: h, b: b, t: t, er: er, erNear: erNear, erFar: erFar, z0Corr: sigLayer.z0Corr };
+    return { model: 'stripline', h: h, b: b, t: t, er: er, erNear: erNear, erFar: erFar, z0Corr: sigLayer.z0Corr, diffCorr: sigLayer.diffCorr };
   } else if (hasTop) {
-    return { model: 'microstrip', h: hUp, b: null, t: t, er: erUp, z0Corr: sigLayer.z0Corr };
+    return { model: 'microstrip', h: hUp, b: null, t: t, er: erUp, z0Corr: sigLayer.z0Corr, diffCorr: sigLayer.diffCorr };
   } else if (hasBot) {
-    return { model: 'microstrip', h: hDown, b: null, t: t, er: erDown, z0Corr: sigLayer.z0Corr };
+    return { model: 'microstrip', h: hDown, b: null, t: t, er: erDown, z0Corr: sigLayer.z0Corr, diffCorr: sigLayer.diffCorr };
   } else {
     return { error: 'Select at least one reference layer' };
   }
@@ -1115,7 +1118,8 @@ function runWidthCalcAll() {
       spacing: d.spacing,
       erNear: params.erNear,
       erFar: params.erFar,
-      z0Corr: params.z0Corr
+      z0Corr: params.z0Corr,
+      diffCorr: params.diffCorr
     });
 
     if (result.width !== null) {

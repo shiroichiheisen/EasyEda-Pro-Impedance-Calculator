@@ -31,7 +31,9 @@ var ImpedanceCalc = (function (exports) {
       er: 4.581,
       gaps: null,
       // Z0 correction vs JLCPCB Si9000: factor(u) = c0+c1*u+c2*u², u=w/h clamped to [uMin,uMax]
-      z0CorrMs: [1.013436, -0.013826, 0.002564, 1.2, 3.2]
+      z0CorrMs: [1.013436, -0.013826, 0.002564, 1.2, 3.2],
+      // Zdiff correction vs JLCPCB Si9000 (s=0.2mm): Zdiff_corr = Zdiff_raw * (c0+c1*u+c2*u²)
+      diffCorrMs: [0.645454, 0.050667, 0.098814, 0.11, 0.87]
     },
 
     // ── 4-Layer ───────────────────────────────────
@@ -52,6 +54,11 @@ var ImpedanceCalc = (function (exports) {
       z0CorrSl: [
         [0.958744, 0.118261, -0.049965, 0.85, 2.4],
         [0.958744, 0.118261, -0.049965, 0.85, 2.4]
+      ],
+      diffCorrMs: [0.868144, 0.081869, -0.012123, 0.48, 2.11],
+      diffCorrSl: [
+        [1.037535, -0.025572, 0.031314, 0.37, 1.65],
+        [1.037535, -0.025572, 0.031314, 0.37, 1.65]
       ]
     },
 
@@ -77,6 +84,13 @@ var ImpedanceCalc = (function (exports) {
         [1.001246, -0.009527, 0.003406, 0.8, 3.5],
         [1.001246, -0.009527, 0.003406, 0.8, 3.5],
         [1.003019, -0.010567, 0.003639, 0.8, 3.5]
+      ],
+      diffCorrMs: [0.922783, 0.012039, 0.002727, 0.6, 2.43],
+      diffCorrSl: [
+        [1.064745, -0.032717, 0.018293, 0.53, 2.08],
+        [1.048268, -0.020277, 0.014497, 0.51, 2.03],
+        [1.048268, -0.020277, 0.014497, 0.51, 2.03],
+        [1.064745, -0.032717, 0.018293, 0.53, 2.08]
       ]
     },
 
@@ -106,6 +120,15 @@ var ImpedanceCalc = (function (exports) {
         [1.012713, -0.017679, 0.004222, 0.7, 3.0],
         [1.012713, -0.017679, 0.004222, 0.7, 3.0],
         [1.012955, -0.017940, 0.004619, 0.7, 3.0]
+      ],
+      diffCorrMs: [0.912298, 0.023137, 0.000473, 0.59, 2.38],
+      diffCorrSl: [
+        [1.004171, -0.013122, 0.012364, 0.48, 1.9],
+        [0.978841, 0.007228, 0.007443, 0.45, 1.79],
+        [0.978841, 0.007228, 0.007443, 0.45, 1.79],
+        [0.978841, 0.007228, 0.007443, 0.45, 1.79],
+        [0.978841, 0.007228, 0.007443, 0.45, 1.79],
+        [1.004171, -0.013122, 0.012364, 0.48, 1.9]
       ]
     }
   };
@@ -170,7 +193,7 @@ var ImpedanceCalc = (function (exports) {
    * @param {number} boardThickness - Total board thickness in mm (default 1.6)
    * @returns {object} Stackup configuration
    */
-  function buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuThickness, innerCuThickness, presetGapEr, presetZ0CorrMs, presetZ0CorrSl) {
+  function buildStackup(pcbData, boardThickness, presetGaps, presetEr, outerCuThickness, innerCuThickness, presetGapEr, presetZ0CorrMs, presetZ0CorrSl, presetDiffCorrMs, presetDiffCorrSl) {
     if (!boardThickness) boardThickness = 1.6;
     if (!presetEr) presetEr = 4.6;
     if (!outerCuThickness) outerCuThickness = 0.04064;
@@ -423,6 +446,17 @@ var ImpedanceCalc = (function (exports) {
         }
       }
 
+      // Zdiff correction polynomial (calibrated vs JLCPCB Polar Si9000)
+      var layerDiffCorr = null;
+      if (isOuterLayer && presetDiffCorrMs) {
+        layerDiffCorr = presetDiffCorrMs;
+      } else if (!isOuterLayer && presetDiffCorrSl) {
+        var innerIdx2 = innerLayers.indexOf(layerNum);
+        if (innerIdx2 >= 0 && innerIdx2 < presetDiffCorrSl.length) {
+          layerDiffCorr = presetDiffCorrSl[innerIdx2];
+        }
+      }
+
       stackupLayers[layerNum] = {
         name: layerName,
         type: type,
@@ -433,6 +467,7 @@ var ImpedanceCalc = (function (exports) {
         erFar:  (type === 'stripline') ? r3(distUp <= distDown ? erDown : erUp) : null,
         copperT: layerCuT,
         z0Corr: layerZ0Corr,
+        diffCorr: layerDiffCorr,
         isPlane: !!planeLayers[layerNum],
         planeNet: planeLayers[layerNum] || null,
         hasTraces: !!signalLayers[layerNum],
@@ -661,6 +696,7 @@ var ImpedanceCalc = (function (exports) {
     var erNear = opts.erNear;
     var erFar = opts.erFar;
     var z0Corr = opts.z0Corr || null;
+    var diffCorr = opts.diffCorr || null;
 
     if (!targetZ0 || targetZ0 <= 0) return { width: null, error: 'Invalid target Z₀' };
     if (!h || h <= 0) return { width: null, error: 'Invalid dielectric height' };
@@ -677,6 +713,7 @@ var ImpedanceCalc = (function (exports) {
         } else {
           rawZ0 = differentialMicrostrip(w, h, t, spacing, er).zDiff;
         }
+        if (diffCorr) rawZ0 = applyZ0Corr(rawZ0, w, h, diffCorr);
       } else {
         if (model === 'stripline') {
           rawZ0 = stripline(w, b || h * 2, t, er, h, erNear, erFar).z0;
