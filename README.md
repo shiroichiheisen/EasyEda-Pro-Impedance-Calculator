@@ -156,6 +156,14 @@ $zip.Dispose()
 
 ## Changelog
 
+### v1.17.0 — Board Outline Curved Corner Fix
+
+- **Arc support in board outline extraction** — boards with rounded corners now render correctly in the Trace Visualization. Previously, arc commands (`ARC`/`A`) in the board outline polyline data were ignored, causing the outline to jump between arc endpoints with straight lines.
+- **New `_parseOutlinePolygon()` parser** — a state-machine that walks the polygon array and properly handles `R` rectangles, `L`/`M` move commands, EasyEDA-style arcs (`ARC`, arcAngle, endX, endY) and SVG-style arcs (rx, ry, rotation, largeArc, sweep, endX, endY). Arcs are approximated with 18 line segments each.
+- **New `_approxArcEda()` / `_approxArc()` helpers** — compute arc center from chord geometry and sample points along the curve for EasyEDA and SVG arc formats respectively.
+- **Strategy 2 (segment chaining) now includes arcs** — outline arcs from `pcb_PrimitiveArc.getAll()` on the board outline layer are subdivided into line segments and included in the chain, so boards built from discrete line + arc primitives also render curved corners correctly.
+- **NaN/null point filtering** — defensive filter on final outline points to prevent rendering glitches from malformed data.
+
 ### v1.16.0 — Differential Pair Impedance Calibration vs JLCPCB Si9000
 
 - **Differential impedance correction polynomials** — added `diffCorrMs` / `diffCorrSl` calibration arrays to all JLCPCB presets (2L, 4L, 6L, 8L), correcting Zdiff values against JLCPCB's Polar Si9000 field solver reference data (s=0.2mm, 80/100/120Ω differential).

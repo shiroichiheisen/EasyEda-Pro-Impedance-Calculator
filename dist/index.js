@@ -27,7 +27,7 @@ var edaEsbuildExportName = (() => {
   });
 
   // extension.json
-  var version = "1.7.2";
+  var version = "1.7.3";
 
   // src/index.ts
   function activate(_status, _arg) {
@@ -360,6 +360,135 @@ var edaEsbuildExportName = (() => {
       }
     } catch (e) {}
 
+    // Approximate arc between two points with line segments (SVG-style)
+    function _approxArc(sx, sy, ex, ey, rx, ry, largeArc, sweep, nSegs) {
+      var pts = [];
+      var dx = ex - sx, dy = ey - sy;
+      var dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 1e-6) { pts.push({ x: ex, y: ey }); return pts; }
+      var r = Math.max(rx, ry) || dist / 2;
+      if (r < dist / 2) r = dist / 2;
+      var mx = (sx + ex) / 2, my = (sy + ey) / 2;
+      var halfChord = dist / 2;
+      var h = Math.sqrt(Math.max(0, r*r - halfChord*halfChord));
+      var nx = -dy / dist, ny = dx / dist;
+      var sign = (sweep ? 1 : -1);
+      if (largeArc) sign = -sign;
+      var cenX = mx + sign * h * nx, cenY = my + sign * h * ny;
+      var sa = Math.atan2(sy - cenY, sx - cenX);
+      var ea = Math.atan2(ey - cenY, ex - cenX);
+      var da = ea - sa;
+      if (sweep && da < 0) da += 2 * Math.PI;
+      if (!sweep && da > 0) da -= 2 * Math.PI;
+      for (var k = 1; k <= nSegs; k++) {
+        var t = k / nSegs;
+        var a = sa + t * da;
+        pts.push({ x: cenX + r * Math.cos(a), y: cenY + r * Math.sin(a) });
+      }
+      return pts;
+    }
+
+    // Approximate arc: EasyEDA-style "ARC", arcAngle, endX, endY
+    function _approxArcEda(sx, sy, ex, ey, arcAngleDeg, nSegs) {
+      var pts = [];
+      if (Math.abs(arcAngleDeg) < 0.01) { pts.push({ x: ex, y: ey }); return pts; }
+      var dx = ex - sx, dy = ey - sy;
+      var chord = Math.sqrt(dx * dx + dy * dy);
+      if (chord < 1e-9) { pts.push({ x: ex, y: ey }); return pts; }
+      var halfAngleRad = Math.abs(arcAngleDeg) * Math.PI / 360;
+      var sinHalf = Math.sin(halfAngleRad);
+      if (Math.abs(sinHalf) < 1e-9) { pts.push({ x: ex, y: ey }); return pts; }
+      var radius = chord / (2 * sinHalf);
+      var cosHalf = Math.cos(halfAngleRad);
+      var h = radius * cosHalf;
+      var mx = (sx + ex) / 2, my = (sy + ey) / 2;
+      var nx = -dy / chord, ny = dx / chord;
+      var sign = arcAngleDeg > 0 ? 1 : -1;
+      var cenX = mx + sign * h * nx, cenY = my + sign * h * ny;
+      var sa = Math.atan2(sy - cenY, sx - cenX);
+      var ea = Math.atan2(ey - cenY, ex - cenX);
+      var da = ea - sa;
+      if (arcAngleDeg < 0) { if (da > 0) da -= 2 * Math.PI; }
+      else { if (da < 0) da += 2 * Math.PI; }
+      for (var k = 1; k <= nSegs; k++) {
+        var t = k / nSegs;
+        var a = sa + t * da;
+        pts.push({ x: cenX + radius * Math.cos(a), y: cenY + radius * Math.sin(a) });
+      }
+      return pts;
+    }
+
+    // Parse polygon data with arc support (state machine parser)
+    function _parseOutlinePolygon(polyObj) {
+      if (!polyObj || !polyObj.polygon || !Array.isArray(polyObj.polygon)) return null;
+      var poly = polyObj.polygon;
+      var points = [];
+
+      if (poly[0] === 'R' && poly.length >= 5) {
+        var rOx = poly[1] * MIL_TO_MM, rOy = poly[2] * MIL_TO_MM;
+        var rW = poly[3] * MIL_TO_MM, rH = poly[4] * MIL_TO_MM;
+        var rAngle = (poly.length >= 6 ? poly[5] : 0) * Math.PI / 180;
+        var rCos = Math.cos(rAngle), rSin = Math.sin(rAngle);
+        var rLocalCorners = [[0, 0], [rW, 0], [rW, -rH], [0, -rH]];
+        for (var ri = 0; ri < 4; ri++) {
+          var rdx = rLocalCorners[ri][0], rdy = rLocalCorners[ri][1];
+          points.push({ x: rOx + rdx * rCos - rdy * rSin, y: rOy + rdx * rSin + rdy * rCos });
+        }
+      } else {
+        var pidx = 0;
+        var pCurX = 0, pCurY = 0;
+        while (pidx < poly.length) {
+          if (typeof poly[pidx] === 'string') {
+            var pcmd = poly[pidx].toUpperCase();
+            pidx++;
+            if (pcmd === 'A' || pcmd === 'ARC') {
+              if (pidx + 2 < poly.length && typeof poly[pidx] === 'number' &&
+                  typeof poly[pidx+1] === 'number' && typeof poly[pidx+2] === 'number') {
+                var isEdaArc = (pidx + 3 >= poly.length || typeof poly[pidx+3] === 'string');
+                if (isEdaArc) {
+                  var arcAngleDeg = poly[pidx];
+                  var aEndX = poly[pidx+1] * MIL_TO_MM;
+                  var aEndY = poly[pidx+2] * MIL_TO_MM;
+                  pidx += 3;
+                  var arcPts = _approxArcEda(pCurX, pCurY, aEndX, aEndY, arcAngleDeg, 18);
+                  for (var api2 = 0; api2 < arcPts.length; api2++) {
+                    points.push(arcPts[api2]);
+                  }
+                  pCurX = aEndX; pCurY = aEndY;
+                } else if (pidx + 6 < poly.length) {
+                  var aRx = Math.abs(poly[pidx]) * MIL_TO_MM;
+                  var aRy = Math.abs(poly[pidx+1]) * MIL_TO_MM;
+                  var aLargeArc = poly[pidx+3];
+                  var aSweep = poly[pidx+4];
+                  var aEndX2 = poly[pidx+5] * MIL_TO_MM;
+                  var aEndY2 = poly[pidx+6] * MIL_TO_MM;
+                  pidx += 7;
+                  var arcPts2 = _approxArc(pCurX, pCurY, aEndX2, aEndY2, aRx, aRy, aLargeArc, aSweep, 18);
+                  for (var api3 = 0; api3 < arcPts2.length; api3++) {
+                    points.push(arcPts2[api3]);
+                  }
+                  pCurX = aEndX2; pCurY = aEndY2;
+                }
+              }
+              continue;
+            }
+            continue;
+          }
+          if (typeof poly[pidx] === 'number' && pidx + 1 < poly.length && typeof poly[pidx+1] === 'number') {
+            var ppx = poly[pidx] * MIL_TO_MM;
+            var ppy = poly[pidx+1] * MIL_TO_MM;
+            points.push({ x: ppx, y: ppy });
+            pCurX = ppx; pCurY = ppy;
+            pidx += 2;
+          } else {
+            pidx++;
+          }
+        }
+      }
+
+      return points.length >= 3 ? points : null;
+    }
+
     // ── Extract board outline ──
     try {
       var boardOutlineLayerId = null;
@@ -374,7 +503,7 @@ var edaEsbuildExportName = (() => {
       if (boardOutlineLayerId !== null) {
         var boardOutlinePoints = [];
 
-        // Strategy 1: Polylines on outline layer
+        // Strategy 1: Polylines on outline layer (with arc support)
         try {
           if (eda.pcb_PrimitivePolyline && typeof eda.pcb_PrimitivePolyline.getAll === 'function') {
             var allPl = await eda.pcb_PrimitivePolyline.getAll();
@@ -387,52 +516,60 @@ var edaEsbuildExportName = (() => {
                 else if (typeof polyProp === 'object') polyObj = polyProp;
               } catch(e) {}
               if (!polyObj || !polyObj.polygon || !Array.isArray(polyObj.polygon)) continue;
-              var poly = polyObj.polygon;
-              if (poly[0] === 'R' && poly.length >= 5) {
-                var bx = poly[1] * MIL_TO_MM, by = poly[2] * MIL_TO_MM;
-                var bw = poly[3] * MIL_TO_MM, bh = poly[4] * MIL_TO_MM;
-                boardOutlinePoints = [
-                  { x: bx, y: by - bh }, { x: bx + bw, y: by - bh },
-                  { x: bx + bw, y: by }, { x: bx, y: by }
-                ];
-              } else {
-                var bNums = [];
-                for (var bni = 0; bni < poly.length; bni++) {
-                  if (typeof poly[bni] === 'number') bNums.push(poly[bni]);
-                }
-                var bPts = [];
-                for (var bni2 = 0; bni2 + 1 < bNums.length; bni2 += 2) {
-                  bPts.push({ x: bNums[bni2] * MIL_TO_MM, y: bNums[bni2 + 1] * MIL_TO_MM });
-                }
-                if (bPts.length >= 3) boardOutlinePoints = bPts;
+              var parsedOutline = _parseOutlinePolygon(polyObj);
+              if (parsedOutline && parsedOutline.length >= 3) {
+                boardOutlinePoints = parsedOutline;
               }
               if (boardOutlinePoints.length >= 3) break;
             }
           }
         } catch(e) {}
 
-        // Strategy 2: Chain line segments on outline layer
+        // Strategy 2: Chain line segments + arcs on outline layer
         if (boardOutlinePoints.length === 0) {
           try {
             var allLn = await eda.pcb_PrimitiveLine.getAll();
-            var olLines = [];
+            var olSegments = [];
             for (var lni = 0; lni < allLn.length; lni++) {
               if (allLn[lni].layer === boardOutlineLayerId) {
-                olLines.push({ x1: allLn[lni].startX * MIL_TO_MM, y1: allLn[lni].startY * MIL_TO_MM,
+                olSegments.push({ x1: allLn[lni].startX * MIL_TO_MM, y1: allLn[lni].startY * MIL_TO_MM,
                   x2: allLn[lni].endX * MIL_TO_MM, y2: allLn[lni].endY * MIL_TO_MM });
               }
             }
-            if (olLines.length >= 3) {
-              var usedSegs = new Array(olLines.length);
-              var chain = [{ x: olLines[0].x1, y: olLines[0].y1 }, { x: olLines[0].x2, y: olLines[0].y2 }];
+            // Also collect arc segments on outline layer
+            try {
+              var allArcs = await eda.pcb_PrimitiveArc.getAll();
+              for (var oai = 0; oai < allArcs.length; oai++) {
+                if (allArcs[oai].layer !== boardOutlineLayerId) continue;
+                var oa = allArcs[oai];
+                var oaSx = oa.startX * MIL_TO_MM, oaSy = oa.startY * MIL_TO_MM;
+                var oaEx = oa.endX * MIL_TO_MM, oaEy = oa.endY * MIL_TO_MM;
+                var oaAngle = oa.arcAngle || 0;
+                if (Math.abs(oaAngle) > 0.1) {
+                  var oaSegs = _approxArcEda(oaSx, oaSy, oaEx, oaEy, oaAngle, 18);
+                  if (oaSegs.length > 0) {
+                    var prevPt = { x: oaSx, y: oaSy };
+                    for (var oasi = 0; oasi < oaSegs.length; oasi++) {
+                      olSegments.push({ x1: prevPt.x, y1: prevPt.y, x2: oaSegs[oasi].x, y2: oaSegs[oasi].y });
+                      prevPt = oaSegs[oasi];
+                    }
+                  }
+                } else {
+                  olSegments.push({ x1: oaSx, y1: oaSy, x2: oaEx, y2: oaEy });
+                }
+              }
+            } catch(e) {}
+            if (olSegments.length >= 3) {
+              var usedSegs = new Array(olSegments.length);
+              var chain = [{ x: olSegments[0].x1, y: olSegments[0].y1 }, { x: olSegments[0].x2, y: olSegments[0].y2 }];
               usedSegs[0] = true;
               var EPS = 0.01;
-              for (var iter = 0; iter < olLines.length; iter++) {
+              for (var iter = 0; iter < olSegments.length; iter++) {
                 var lastPt = chain[chain.length - 1];
                 var found = false;
-                for (var si = 0; si < olLines.length; si++) {
+                for (var si = 0; si < olSegments.length; si++) {
                   if (usedSegs[si]) continue;
-                  var s = olLines[si];
+                  var s = olSegments[si];
                   if (Math.abs(s.x1 - lastPt.x) + Math.abs(s.y1 - lastPt.y) < EPS) {
                     chain.push({ x: s.x2, y: s.y2 }); usedSegs[si] = true; found = true; break;
                   } else if (Math.abs(s.x2 - lastPt.x) + Math.abs(s.y2 - lastPt.y) < EPS) {
@@ -450,6 +587,10 @@ var edaEsbuildExportName = (() => {
           } catch(e) {}
         }
 
+        // Filter out any null/NaN points
+        boardOutlinePoints = boardOutlinePoints.filter(function(p) {
+          return p && typeof p.x === 'number' && typeof p.y === 'number' && !isNaN(p.x) && !isNaN(p.y);
+        });
         result.boardOutline = boardOutlinePoints.length >= 3 ? boardOutlinePoints : null;
       }
     } catch(e) {}
