@@ -307,7 +307,7 @@ var ImpedanceCalc = (function (exports) {
         }
       } else if (numGaps === 1) {
         // 2L: dielectric gap = board thickness minus both copper layers
-        spacings[0] = boardThickness - 2 * copperThickness;
+        spacings[0] = boardThickness - 2 * outerCuThickness;
         gapErValues[0] = presetEr;
       } else {
         // No preset or preset has fewer gaps — distribute evenly

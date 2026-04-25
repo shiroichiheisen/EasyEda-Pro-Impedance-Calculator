@@ -27,7 +27,7 @@ var edaEsbuildExportName = (() => {
   });
 
   // extension.json
-  var version = "1.7.3";
+  var version = "1.17.1";
 
   // src/index.ts
   function activate(_status, _arg) {
@@ -70,12 +70,16 @@ var edaEsbuildExportName = (() => {
 
       toast("Found " + pcbData.lines.length + " traces, " + pcbData.arcs.length + " arcs, " + pcbData.vias.length + " vias, " + pcbData.pads.length + " pads", "success");
 
-      // Show which layer IDs were found (helps debug layer mapping)
+      // Show which copper layer IDs were found (helps debug layer mapping)
+      // Only include copper layers: 1 (Top), 2 (Bottom), 15-46 (Inner)
       var layerSet = {};
       pcbData.lines.forEach(function(l) { layerSet[l.layer] = true; });
       pcbData.arcs.forEach(function(a) { layerSet[a.layer] = true; });
-      var layerIds = Object.keys(layerSet).sort(function(a,b){ return a-b; });
-      toast("Layers detected: " + layerIds.join(", "), "info", 5);
+      var layerIds = Object.keys(layerSet)
+        .map(function(id) { return Number(id); })
+        .filter(function(id) { return id === 1 || id === 2 || (id >= 15 && id <= 46); })
+        .sort(function(a,b){ return a-b; });
+      toast("Copper layers detected: " + layerIds.join(", "), "info", 5);
 
       var ok = await eda.sys_Storage.setExtensionUserConfig(STORAGE_KEY, pcbData);
       if (!ok) {
