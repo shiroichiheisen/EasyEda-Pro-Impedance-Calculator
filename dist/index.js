@@ -27,7 +27,7 @@ var edaEsbuildExportName = (() => {
   });
 
   // extension.json
-  var version = "1.17.1";
+  var version = "1.17.2";
 
   // src/index.ts
   function activate(_status, _arg) {

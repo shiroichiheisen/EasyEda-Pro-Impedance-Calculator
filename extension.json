@@ -3,7 +3,7 @@
 	"uuid": "a7b3e1d4f09c48e6b5d2c8a1f3e7d9b0",
 	"displayName": "PCB Trace Impedance Calculator",
 	"description": "Calculates the characteristic impedance (Z₀) of each PCB trace segment — Microstrip, Stripline and Differential",
-	"version": "1.17.1",
+	"version": "1.17.2",
 	"publisher": "",
 	"engines": {
 		"eda": "^3.0.0"
