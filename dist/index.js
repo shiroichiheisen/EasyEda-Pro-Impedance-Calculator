@@ -42,6 +42,39 @@ var edaEsbuildExportName = (() => {
 
   var STORAGE_KEY = "impedance-calc-data";
 
+  function storageSetLocal(key, value) {
+    try {
+      if (typeof localStorage === "undefined") return false;
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function storageSet(key, value) {
+    var localOk = storageSetLocal(key, value);
+    if (typeof eda === "undefined" || !eda.sys_Storage || typeof eda.sys_Storage.setExtensionUserConfig !== "function") return localOk;
+    var easyOk = false;
+    try {
+      var keyedOk = await eda.sys_Storage.setExtensionUserConfig(key, value);
+      easyOk = keyedOk !== false;
+    } catch (keyedError) {}
+    if (!easyOk) {
+      try {
+        var root = {};
+        try {
+          var existing = await eda.sys_Storage.getExtensionUserConfig();
+          if (existing && typeof existing === "object" && !Array.isArray(existing)) root = existing;
+        } catch (readError) {}
+        root[key] = value;
+        var objectOk = await eda.sys_Storage.setExtensionUserConfig(root);
+        easyOk = objectOk !== false;
+      } catch (objectError) {}
+    }
+    return localOk || easyOk;
+  }
+
   function toast(msg, type, timer) {
     if (type === void 0) type = "info";
     if (timer === void 0) timer = 3;
@@ -81,15 +114,7 @@ var edaEsbuildExportName = (() => {
         .sort(function(a,b){ return a-b; });
       toast("Copper layers detected: " + layerIds.join(", "), "info", 5);
 
-      var ok = await eda.sys_Storage.setExtensionUserConfig(STORAGE_KEY, pcbData);
-      if (!ok) {
-        toast("Failed to store data", "error");
-        eda.sys_Dialog.showInformationMessage(
-          "Failed to store PCB data.",
-          "Error"
-        );
-        return;
-      }
+      await storageSet(STORAGE_KEY, pcbData);
 
       toast("Opening impedance calculator...", "info", 2);
       await eda.sys_IFrame.openIFrame(

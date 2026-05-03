@@ -164,6 +164,8 @@ var selectedCrossing = null; // { netA, layerA, netB, layerB }
 
 var STORAGE_KEY = 'impedance-calc-data';
 var STACKUP_STORAGE_KEY = 'impedance-calc-stackup';
+var SELECTED_STORAGE_KEY = 'impedance-calc-selected';
+var STORAGE_KEYS = [STORAGE_KEY, STACKUP_STORAGE_KEY, SELECTED_STORAGE_KEY];
 
 // ═══════════════════════════════════════
 // Adjacent layer crossing filter
@@ -1058,6 +1060,88 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function hasOwnPropertyOf(value, key) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function looksLikeStorageRoot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  for (var i = 0; i < STORAGE_KEYS.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(value, STORAGE_KEYS[i])) return true;
+  }
+  return false;
+}
+
+function looksLikeStoredValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && (
+    Object.prototype.hasOwnProperty.call(value, 'lines') ||
+    Object.prototype.hasOwnProperty.call(value, 'arcs') ||
+    Object.prototype.hasOwnProperty.call(value, 'vias') ||
+    Object.prototype.hasOwnProperty.call(value, 'pads') ||
+    Object.prototype.hasOwnProperty.call(value, 'zones') ||
+    Object.prototype.hasOwnProperty.call(value, 'nets') ||
+    Object.prototype.hasOwnProperty.call(value, 'preset')
+  );
+}
+
+function storageGetLocal(key) {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    var raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+function storageDeleteLocal(key) {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    localStorage.removeItem(key);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+async function storageGet(key) {
+  var localValue = storageGetLocal(key);
+  if (localValue !== null) return localValue;
+  if (typeof eda === 'undefined' || !eda.sys_Storage || typeof eda.sys_Storage.getExtensionUserConfig !== 'function') return null;
+  try {
+    var keyed = await eda.sys_Storage.getExtensionUserConfig(key);
+    if (hasOwnPropertyOf(keyed, key)) return keyed[key];
+    if (looksLikeStorageRoot(keyed)) return null;
+    if (looksLikeStoredValue(keyed)) return keyed;
+  } catch(e) {}
+  try {
+    var root = await eda.sys_Storage.getExtensionUserConfig();
+    if (hasOwnPropertyOf(root, key)) return root[key];
+  } catch(e) {}
+  return null;
+}
+
+async function storageDelete(key) {
+  var localOk = storageDeleteLocal(key);
+  if (typeof eda === 'undefined' || !eda.sys_Storage) return localOk;
+  var easyOk = false;
+  try {
+    var root = await eda.sys_Storage.getExtensionUserConfig();
+    if (hasOwnPropertyOf(root, key)) {
+      delete root[key];
+      var objectOk = await eda.sys_Storage.setExtensionUserConfig(root);
+      easyOk = objectOk !== false;
+    }
+  } catch(objectError) {}
+  try {
+    if (eda.sys_Storage && typeof eda.sys_Storage.deleteExtensionUserConfig === 'function') {
+      await eda.sys_Storage.deleteExtensionUserConfig(key);
+      easyOk = true;
+    }
+  } catch(keyedError) {}
+  return localOk || easyOk;
+}
+
 // ═══════════════════════════════════════
 // Data loading
 // ═══════════════════════════════════════
@@ -1066,14 +1150,14 @@ async function loadData() {
     // Check for selected traces data (written by "View Selected" button)
     var selectedData = null;
     try {
-      selectedData = await eda.sys_Storage.getExtensionUserConfig('impedance-calc-selected');
+      selectedData = await storageGet(SELECTED_STORAGE_KEY);
     } catch(e) {}
     if (selectedData && (selectedData.lines || selectedData.arcs)) {
       pcbData = selectedData;
       // Clear selected data so next normal open uses full data
-      try { await eda.sys_Storage.deleteExtensionUserConfig('impedance-calc-selected'); } catch(e) {}
+      try { await storageDelete(SELECTED_STORAGE_KEY); } catch(e) {}
     } else {
-      pcbData = await eda.sys_Storage.getExtensionUserConfig(STORAGE_KEY);
+      pcbData = await storageGet(STORAGE_KEY);
     }
     if (!pcbData || (!pcbData.lines && !pcbData.arcs)) {
       document.getElementById('stats-content').textContent = 'No PCB data found. Run the calculator first.';
@@ -1083,7 +1167,7 @@ async function loadData() {
     }
 
     // Load stackup preset
-    var savedStackup = await eda.sys_Storage.getExtensionUserConfig(STACKUP_STORAGE_KEY);
+    var savedStackup = await storageGet(STACKUP_STORAGE_KEY);
     var presetKey = (savedStackup && savedStackup.preset) ? savedStackup.preset : '4L-1.6mm-jlcpcb-7628';
     var preset = ImpedanceCalc.STACKUP_PRESETS[presetKey];
     var presetGaps = (preset && preset.gaps) ? preset.gaps : null;
